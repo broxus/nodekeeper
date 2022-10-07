@@ -15,7 +15,7 @@ pub enum NodeStats {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct RunningStats {
-    pub node_version: String,
+    pub node_version: NodeVersion,
     pub mc_time: u32,
     pub mc_time_diff: i32,
     pub sc_time_diff: i32,
@@ -57,7 +57,8 @@ impl TryFrom<proto::Stats> for NodeStats {
                     mc_time = Some(parse_stat::<u32>(&item.value)?);
                 }
                 STATS_NODE_VERSION => {
-                    node_version = Some(parse_stat::<String>(&item.value)?);
+                    let str = parse_stat::<String>(&item.value)?;
+                    node_version = Some(NodeVersion::from_str(&str)?);
                 }
                 STATS_TIMEDIFF => {
                     mc_time_diff = Some(parse_stat::<i32>(&item.value)?);
@@ -162,6 +163,34 @@ impl TryFrom<proto::Stats> for NodeStats {
                 }))
             }
             _ => Err(StatsError::FieldsMissing),
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Serialize)]
+pub struct NodeVersion {
+    pub major: u32,
+    pub minor: u32,
+    pub patch: u32,
+}
+
+impl FromStr for NodeVersion {
+    type Err = StatsError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut parts = s.split('.');
+
+        fn parse_part(part: &str) -> Result<u32, StatsError> {
+            u32::from_str(part).map_err(|_| StatsError::InvalidValue)
+        }
+
+        match (parts.next(), parts.next(), parts.next()) {
+            (Some(major), Some(minor), Some(patch)) => Ok(Self {
+                major: parse_part(major)?,
+                minor: parse_part(minor)?,
+                patch: parse_part(patch)?,
+            }),
+            _ => Err(StatsError::InvalidValue),
         }
     }
 }

@@ -1,4 +1,4 @@
-use tl_proto::{IntermediateBytes, IterRef, TlRead, TlWrite};
+use tl_proto::{IntermediateBytes, TlRead, TlWrite};
 
 #[derive(TlWrite)]
 #[tl(boxed, id = "engine.validator.controlQuery", scheme = "proto.tl")]
@@ -89,18 +89,6 @@ pub struct GetStats;
 )]
 pub struct SetStatesGcInterval {
     pub interval_ms: u32,
-}
-
-#[derive(Copy, Clone, TlWrite)]
-#[tl(boxed, id = "engine.validator.getBundle", scheme = "proto.tl")]
-pub struct GetBundle<'tl> {
-    pub block_id: BlockIdExt<'tl>,
-}
-
-#[derive(Copy, Clone, TlWrite)]
-#[tl(boxed, id = "engine.validator.getFutureBundle", scheme = "proto.tl")]
-pub struct GetFutureBundle<'tl, I: Iterator<Item = BlockIdExt<'tl>> + ExactSizeIterator + Clone> {
-    pub prev_block_ids: IterRef<'tl, I>,
 }
 
 #[derive(Copy, Clone, TlWrite)]

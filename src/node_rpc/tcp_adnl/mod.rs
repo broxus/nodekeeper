@@ -22,6 +22,7 @@ pub struct TcpAdnlConfig {
     pub server_address: SocketAddr,
     pub server_pubkey: ed25519::PublicKey,
     pub client_secret: ed25519::SecretKey,
+    pub connection_timeout: Duration,
 }
 
 #[derive(Clone)]
@@ -31,10 +32,17 @@ pub struct TcpAdnl {
 
 impl TcpAdnl {
     pub async fn connect(config: TcpAdnlConfig) -> Result<Self, TcpAdnlError> {
-        let (socket_rx, socket_tx) = TcpStream::connect(config.server_address)
-            .await
-            .map_err(TcpAdnlError::ConnectionError)?
-            .into_split();
+        let (socket_rx, socket_tx) = match tokio::time::timeout(
+            config.connection_timeout,
+            TcpStream::connect(config.server_address),
+        )
+        .await
+        {
+            Ok(connection) => connection
+                .map_err(TcpAdnlError::ConnectionError)?
+                .into_split(),
+            Err(_) => return Err(TcpAdnlError::ConnectionTimeout),
+        };
 
         let mut initial_buffer = vec![0; 160];
         rand::thread_rng().fill_bytes(&mut initial_buffer);
@@ -343,6 +351,8 @@ struct AdnlMessageAnswer<'tl> {
 
 #[derive(thiserror::Error, Debug)]
 pub enum TcpAdnlError {
+    #[error("connection timeout")]
+    ConnectionTimeout,
     #[error("failed to open connection")]
     ConnectionError(#[source] std::io::Error),
     #[error("socket closed")]

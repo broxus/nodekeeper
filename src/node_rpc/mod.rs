@@ -5,13 +5,16 @@ use everscale_crypto::ed25519;
 use tl_proto::{IntermediateBytes, TlRead, TlWrite};
 use ton_block::Deserializable;
 
-use self::stats::{NodeStats, StatsError};
+use self::stats::StatsError;
+pub use self::stats::{NodeStats, ValidatorSetEntry};
+use self::tcp_adnl::{TcpAdnl, TcpAdnlConfig, TcpAdnlError};
 use crate::config::Config;
-use crate::tcp_adnl::{TcpAdnl, TcpAdnlConfig, TcpAdnlError};
 
 mod proto;
 mod stats;
+mod tcp_adnl;
 
+#[derive(Clone)]
 pub struct NodeRpc {
     tcp_adnl: TcpAdnl,
     query_timeout: Duration,
@@ -23,6 +26,7 @@ impl NodeRpc {
             server_address: config.server_address,
             server_pubkey: config.server_pubkey,
             client_secret: config.client_secret,
+            connection_timeout: config.connection_timeout,
         })
         .await
         .map_err(NodeRpcError::ConnectionFailed)?;

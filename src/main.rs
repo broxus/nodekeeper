@@ -2,8 +2,8 @@ use anyhow::Result;
 
 mod cli;
 mod config;
+mod exporter;
 mod node_rpc;
-mod tcp_adnl;
 mod util;
 
 #[tokio::main]

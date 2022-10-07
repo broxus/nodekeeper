@@ -10,31 +10,31 @@ use crate::util::*;
 #[derive(FromArgs)]
 /// Raw node tools operations
 #[argh(subcommand, name = "node")]
-pub struct Node {
+pub struct Cmd {
     #[argh(subcommand)]
-    subcommand: CmdNode,
+    subcommand: SubCmd,
 }
 
-impl Node {
+impl Cmd {
     pub async fn run(self, mut ctx: CliContext) -> Result<()> {
         let config = ctx.load_config()?;
         let rpc_node = NodeRpc::new(&config).await?;
 
         let response = match self.subcommand {
-            CmdNode::GenKey(_) => {
+            SubCmd::GenKey(_) => {
                 let hey_hash = rpc_node.generate_key_pair().await?;
                 serde_json::json!({
                     "key_hash": hex::encode(hey_hash),
                 })
             }
-            CmdNode::ExportPubKey(cmd) => {
+            SubCmd::ExportPubKey(cmd) => {
                 let key_hash = parse_key_hash(&cmd.key_hash)?;
                 let public = rpc_node.export_public_key(&key_hash).await?;
                 serde_json::json!({
                     "public": hex::encode(public.as_bytes())
                 })
             }
-            CmdNode::Sign(cmd) => {
+            SubCmd::Sign(cmd) => {
                 let key_hash = parse_key_hash(&cmd.key_hash)?;
                 let data = parse_optional_input(cmd.data, false)?;
                 let signature = rpc_node.sign(&key_hash, &data).await?;
@@ -42,14 +42,14 @@ impl Node {
                     "signature": base64::encode(signature),
                 })
             }
-            CmdNode::AddPermKey(cmd) => {
+            SubCmd::AddPermKey(cmd) => {
                 let key_hash = parse_key_hash(&cmd.key_hash)?;
                 rpc_node
                     .add_validator_permanent_key(&key_hash, cmd.election_id, cmd.ttl)
                     .await?;
                 serde_json::json!({})
             }
-            CmdNode::AddTempKey(cmd) => {
+            SubCmd::AddTempKey(cmd) => {
                 let permanent_key_hash = parse_key_hash(&cmd.permanent_key_hash)?;
                 let key_hash = parse_key_hash(&cmd.key_hash)?;
                 rpc_node
@@ -57,7 +57,7 @@ impl Node {
                     .await?;
                 serde_json::json!({})
             }
-            CmdNode::AddValidatorAddr(cmd) => {
+            SubCmd::AddValidatorAddr(cmd) => {
                 let permanent_key_hash = parse_key_hash(&cmd.permanent_key_hash)?;
                 let key_hash = parse_key_hash(&cmd.key_hash)?;
                 rpc_node
@@ -65,20 +65,20 @@ impl Node {
                     .await?;
                 serde_json::json!({})
             }
-            CmdNode::AddAdnl(cmd) => {
+            SubCmd::AddAdnl(cmd) => {
                 let key_hash = parse_key_hash(&cmd.key_hash)?;
                 rpc_node.add_adnl_id(&key_hash, cmd.category).await?;
                 serde_json::json!({})
             }
-            CmdNode::GetStats(_) => {
+            SubCmd::GetStats(_) => {
                 let stats = rpc_node.get_stats().await?;
                 serde_json::to_value(stats)?
             }
-            CmdNode::SetStatesGcInterval(cmd) => {
+            SubCmd::SetStatesGcInterval(cmd) => {
                 rpc_node.set_states_gc_interval(cmd.interval).await?;
                 serde_json::json!({})
             }
-            CmdNode::GetConfig(_) => {
+            SubCmd::GetConfig(_) => {
                 #[derive(Serialize)]
                 struct Response {
                     #[serde(with = "serde_block_id")]
@@ -92,7 +92,7 @@ impl Node {
                     config: base64::encode(ton_types::serialize_toc(&config.serialize()?)?),
                 })?
             }
-            CmdNode::GetConfigParam(cmd) => {
+            SubCmd::GetConfigParam(cmd) => {
                 #[derive(Serialize)]
                 struct Response {
                     #[serde(with = "serde_block_id")]
@@ -113,14 +113,14 @@ impl Node {
                 };
                 serde_json::to_value(Response { block_id, value })?
             }
-            CmdNode::GetAccount(cmd) => {
+            SubCmd::GetAccount(cmd) => {
                 let address = parse_address(&cmd.address)?;
                 let param = rpc_node.get_shard_account_state(&address).await?;
                 serde_json::json!({
                     "state": base64::encode(ton_types::serialize_toc(&param.serialize()?)?)
                 })
             }
-            CmdNode::SendMessage(cmd) => {
+            SubCmd::SendMessage(cmd) => {
                 let data = parse_optional_input(cmd.data, false)?;
                 rpc_node.send_message(&data).await?;
                 serde_json::json!({})
@@ -134,7 +134,7 @@ impl Node {
 
 #[derive(FromArgs)]
 #[argh(subcommand)]
-enum CmdNode {
+enum SubCmd {
     GenKey(CmdNodeGenKey),
     ExportPubKey(CmdNodeExportPubKey),
     Sign(CmdNodeSign),

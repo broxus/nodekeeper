@@ -7,6 +7,7 @@ edition = "2021"
 aes = "0.8"
 anyhow = "1.0.65"
 argh = "0.1.9"
+async-trait = "0.1.57"
 base64 = "0.13.0"
 broxus-util = "0.1.5"
 config = { version = "0.13.2", default-features = false, features = ["json", "yaml", "toml"] }
@@ -15,6 +16,8 @@ dashmap = "5.4.0"
 everscale-crypto = { version = "0.1.4", features = ["tl-proto"] }
 generic-array = "0.14"
 hex = "0.4"
+parking_lot = "0.12.1"
+pomfrit = "0.1.8"
 rand = "0.8.5"
 rustc-hash = "1.1.0"
 serde = { version = "1", features = ["derive"] }

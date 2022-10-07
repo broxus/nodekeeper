@@ -5,6 +5,7 @@ use argh::FromArgs;
 
 use crate::config::Config;
 
+pub mod exporter;
 pub mod node;
 
 /// All-in-one node management tool with support for the upcoming stEVER
@@ -25,6 +26,7 @@ impl App {
         };
 
         match self.command {
+            Command::Exporter(cmd) => cmd.run(ctx).await,
             Command::Node(cmd) => cmd.run(ctx).await,
         }
     }
@@ -33,7 +35,8 @@ impl App {
 #[derive(FromArgs)]
 #[argh(subcommand)]
 enum Command {
-    Node(node::Node),
+    Exporter(exporter::Cmd),
+    Node(node::Cmd),
 }
 
 pub struct CliContext {

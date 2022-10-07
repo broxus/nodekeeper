@@ -14,6 +14,8 @@ pub struct Config {
     pub server_pubkey: ed25519::PublicKey,
     #[serde(with = "serde_secret_key")]
     pub client_secret: ed25519::SecretKey,
+    #[serde(with = "serde_duration_ms", default = "const_duration_ms::<2000>")]
+    pub connection_timeout: Duration,
     #[serde(with = "serde_duration_ms", default = "const_duration_ms::<10000>")]
     pub query_timeout: Duration,
 }

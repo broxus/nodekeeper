@@ -49,9 +49,6 @@ engine.validator.addAdnlId key_hash:int256 category:int = engine.validator.Succe
 engine.validator.getStats = engine.validator.Stats;
 engine.validator.setStatesGcInterval interval_ms:int = engine.validator.Success;
 
-engine.validator.getBundle block_id:tonNode.blockIdExt = engine.validator.Success;
-engine.validator.getFutureBundle prev_block_ids:(vector tonNode.blockIdExt) = engine.validator.Success;
-
 liteServer.sendMessage body:bytes = liteServer.SendMsgStatus;
 liteServer.getConfigAll mode:# id:tonNode.blockIdExt = liteServer.ConfigInfo;
 liteServer.getConfigParams mode:# id:tonNode.blockIdExt param_list:(vector int) = liteServer.ConfigInfo;
