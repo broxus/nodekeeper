@@ -1,2 +1,6 @@
 /.idea
 /target
+
+/config.yaml
+/config.json
+/config.toml

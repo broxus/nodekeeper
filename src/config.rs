@@ -8,7 +8,6 @@ use serde::Deserialize;
 use crate::util::{serde_public_key, serde_secret_key};
 
 #[derive(Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Config {
     pub server_address: SocketAddr,
     #[serde(with = "serde_public_key")]

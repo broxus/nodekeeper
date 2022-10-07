@@ -244,7 +244,7 @@ where
         buffer.truncate(length - 32);
         buffer.drain(..32);
 
-        if buffer.len() == 0 {
+        if buffer.is_empty() {
             continue;
         }
 
@@ -296,7 +296,7 @@ pub fn build_handshake_packet(
     let server_short_id = tl_proto::hash(server_pubkey.as_tl());
     let client_public_key = ed25519::PublicKey::from(client_secret);
 
-    let shared_secret = client_secret.expand().compute_shared_secret(&server_pubkey);
+    let shared_secret = client_secret.expand().compute_shared_secret(server_pubkey);
 
     // Prepare packet
     let checksum: [u8; 32] = sha2::Sha256::digest(buffer.as_slice()).into();
@@ -347,8 +347,6 @@ pub enum TcpAdnlError {
     ConnectionError(#[source] std::io::Error),
     #[error("socket closed")]
     SocketClosed,
-    #[error("channel closed")]
-    ChannelClosed,
     #[error("queries cache failed")]
     CacheFailed(#[source] QueriesCacheError),
     #[error("invalid answer")]

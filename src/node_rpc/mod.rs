@@ -1,16 +1,16 @@
-use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::Result;
-use broxus_util::serde_hex_array;
 use everscale_crypto::ed25519;
-use serde::Deserialize;
 use tl_proto::{IntermediateBytes, TlRead, TlWrite};
+use ton_block::Deserializable;
 
+use self::stats::{NodeStats, StatsError};
 use crate::config::Config;
 use crate::tcp_adnl::{TcpAdnl, TcpAdnlConfig, TcpAdnlError};
 
 mod proto;
+mod stats;
 
 pub struct NodeRpc {
     tcp_adnl: TcpAdnl,
@@ -25,7 +25,7 @@ impl NodeRpc {
             client_secret: config.client_secret,
         })
         .await
-        .map_err(NodeRpcError::QueryFailed)?;
+        .map_err(NodeRpcError::ConnectionFailed)?;
 
         let query_timeout = config.query_timeout;
 
@@ -33,10 +33,6 @@ impl NodeRpc {
             tcp_adnl,
             query_timeout,
         })
-    }
-
-    pub fn connection(&self) -> &TcpAdnl {
-        &self.tcp_adnl
     }
 
     pub async fn generate_key_pair(&self) -> Result<[u8; 32], NodeRpcError> {
@@ -114,10 +110,9 @@ impl NodeRpc {
         Ok(())
     }
 
-    pub async fn get_stats(&self) -> Result<(), NodeRpcError> {
+    pub async fn get_stats(&self) -> Result<NodeStats, NodeRpcError> {
         let stats = self.query::<_, proto::Stats>(proto::GetStats).await?;
-        let stats = NodeStats::try_from(stats)?;
-        Ok(())
+        NodeStats::try_from(stats).map_err(NodeRpcError::InvalidStats)
     }
 
     pub async fn set_states_gc_interval(&self, interval_ms: u32) -> Result<(), NodeRpcError> {
@@ -133,19 +128,27 @@ impl NodeRpc {
             .map(expect_success)
     }
 
-    pub async fn get_config_all(&self) -> Result<(), NodeRpcError> {
-        let proto::ConfigInfo { id, .. } = self
+    pub async fn get_config_all(&self) -> Result<ConfigWithId, NodeRpcError> {
+        let proto::ConfigInfo {
+            id, config_proof, ..
+        } = self
             .query(proto::GetConfigAll {
                 mode: 0,
                 id: proto::BlockIdExt::default(),
             })
             .await?;
 
-        Ok(())
+        Ok(ConfigWithId {
+            block_id: convert_proto_to_block_id(id)?,
+            config: ton_block::ConfigParams::construct_from_bytes(&config_proof)
+                .map_err(|_| NodeRpcError::InvalidBlockchainConfig)?,
+        })
     }
 
-    pub async fn get_config_param(&self, param: u32) -> Result<(), NodeRpcError> {
-        let proto::ConfigInfo { id, .. } = self
+    pub async fn get_config_param(&self, param: u32) -> Result<ConfigParamWithId, NodeRpcError> {
+        let proto::ConfigInfo {
+            id, config_proof, ..
+        } = self
             .query(proto::GetConfigParams {
                 mode: 0,
                 id: proto::BlockIdExt::default(),
@@ -153,19 +156,29 @@ impl NodeRpc {
             })
             .await?;
 
-        println!("{id:?}");
-
-        Ok(())
+        Ok(ConfigParamWithId {
+            block_id: convert_proto_to_block_id(id)?,
+            param: String::from_utf8(config_proof).map_err(|_| NodeRpcError::InvalidString)?,
+        })
     }
 
-    pub async fn get_shard_account_state(&self, address: &str) -> Result<(), NodeRpcError> {
-        let _shard_account = self
+    pub async fn get_shard_account_state(
+        &self,
+        address: &ton_block::MsgAddressInt,
+    ) -> Result<ton_block::ShardAccount, NodeRpcError> {
+        let shard_account = self
             .query::<_, proto::ShardAccount>(proto::GetShardAccountState {
-                address: address.as_bytes(),
+                address: address.to_string().as_bytes(),
             })
             .await?;
 
-        todo!()
+        match shard_account {
+            proto::ShardAccount::State(data) => {
+                ton_block::ShardAccount::construct_from_bytes(&data)
+                    .map_err(|_| NodeRpcError::InvalidAccountState)
+            }
+            proto::ShardAccount::Empty => Ok(ton_block::ShardAccount::default()),
+        }
     }
 
     async fn query<Q, R>(&self, query: Q) -> Result<R, NodeRpcError>
@@ -188,152 +201,26 @@ impl NodeRpc {
     }
 }
 
-pub struct NodeStats {}
-
-impl TryFrom<proto::Stats> for NodeStats {
-    type Error = NodeRpcError;
-
-    fn try_from(stats: proto::Stats) -> Result<Self, Self::Error> {
-        let mut sync_status = None;
-        let mut mc_block_time = None;
-        let mut mc_block_seqno = None;
-        let mut node_version = None;
-        let mut timediff = None;
-        let mut shards_timediff = None;
-        let mut in_current_vset = None;
-        let mut current_vset_adnl = None;
-        let mut in_next_vset = None;
-        let mut next_vset_adnl = None;
-        let mut last_applied_mc_block = None;
-
-        #[inline]
-        fn parse_stat<'de, T: Deserialize<'de>>(value: &'de [u8]) -> Result<T, NodeRpcError> {
-            serde_json::from_slice::<T>(value).map_err(|_| NodeRpcError::InvalidStats)
-        }
-
-        #[derive(Deserialize)]
-        struct Adnl(#[serde(with = "serde_hex_array")] [u8; 32]);
-
-        for item in stats.items {
-            match item.key.as_slice() {
-                STATS_SYNC_STATUS => {
-                    sync_status = Some(parse_stat::<SyncStatus>(&item.value)?);
-                }
-                STATS_MC_BLOCK_TIME => {
-                    mc_block_time = Some(parse_stat::<u32>(&item.value)?);
-                }
-                STATS_MC_BLOCK_SEQNO => {
-                    mc_block_seqno = Some(parse_stat::<u32>(&item.value)?);
-                }
-                STATS_NODE_VERSION => {
-                    node_version = Some(parse_stat::<String>(&item.value)?);
-                }
-                STATS_TIMEDIFF => {
-                    timediff = Some(parse_stat::<i32>(&item.value)?);
-                }
-                STATS_SHARDS_TIMEDIFF => {
-                    #[derive(Deserialize)]
-                    #[serde(untagged)]
-                    enum ShardsTimeDiff<'a> {
-                        Unknown(&'a str),
-                        Known(i32),
-                    }
-                    shards_timediff = match parse_stat(&item.value)? {
-                        ShardsTimeDiff::Unknown(..) => None,
-                        ShardsTimeDiff::Known(diff) => Some(diff),
-                    };
-                }
-                STATS_IN_CURRENT_VSET => {
-                    in_current_vset = Some(parse_stat::<bool>(&item.value)?);
-                }
-                STATS_CURRENT_VSET_ADNL => {
-                    let Adnl(adnl) = parse_stat(&item.value)?;
-                    current_vset_adnl = Some(adnl);
-                }
-                STATS_IN_NEXT_VSET => {
-                    in_next_vset = Some(parse_stat::<bool>(&item.value)?);
-                }
-                STATS_NEXT_VSET_ADNL => {
-                    let Adnl(adnl) = parse_stat(&item.value)?;
-                    next_vset_adnl = Some(adnl);
-                }
-                STATS_LAST_APPLIED_MC_BLOCK => {
-                    #[derive(Deserialize)]
-                    struct Block<'a> {
-                        shard: &'a str,
-                        seq_no: u32,
-                        #[serde(with = "serde_hex_array")]
-                        rh: [u8; 32],
-                        #[serde(with = "serde_hex_array")]
-                        fh: [u8; 32],
-                    }
-                    let block = parse_stat::<Block>(&item.value)?;
-
-                    let mut shard_parts = block.shard.split(':');
-                    let shard_id = match (shard_parts.next(), shard_parts.next()) {
-                        (Some(wc), Some(shard)) => {
-                            let wc = i32::from_str(wc).map_err(|_| NodeRpcError::InvalidStats)?;
-                            let shard = u64::from_str_radix(shard, 16)
-                                .map_err(|_| NodeRpcError::InvalidStats)?;
-                            ton_block::ShardIdent::with_tagged_prefix(wc, shard)
-                                .map_err(|_| NodeRpcError::InvalidStats)?
-                        }
-                        _ => return Err(NodeRpcError::InvalidStats),
-                    };
-
-                    last_applied_mc_block = Some(ton_block::BlockIdExt {
-                        shard_id,
-                        seq_no: block.seq_no,
-                        file_hash: block.rh.into(),
-                        root_hash: block.fh.into(),
-                    });
-                }
-                _ => {}
-            }
-        }
-
-        println!("S: {sync_status:?}");
-        println!("S: {mc_block_time:?}");
-        println!("S: {mc_block_seqno:?}");
-        println!("S: {node_version:?}");
-        println!("S: {timediff:?}");
-        println!("S: {last_applied_mc_block:?}");
-
-        Ok(Self {})
-    }
+fn convert_proto_to_block_id(
+    id: proto::BlockIdExtOwned,
+) -> Result<ton_block::BlockIdExt, NodeRpcError> {
+    Ok(ton_block::BlockIdExt {
+        shard_id: ton_block::ShardIdent::with_tagged_prefix(id.workchain, id.shard)
+            .map_err(|_| NodeRpcError::InvalidBlockId)?,
+        seq_no: id.seqno,
+        root_hash: id.root_hash.into(),
+        file_hash: id.file_hash.into(),
+    })
 }
 
-const STATS_MC_BLOCK: &[u8] = b"masterchainblock";
-const STATS_SYNC_STATUS: &[u8] = b"sync_status";
-const STATS_MC_BLOCK_TIME: &[u8] = b"masterchainblocktime";
-const STATS_MC_BLOCK_SEQNO: &[u8] = b"masterchainblocknumber";
-const STATS_NODE_VERSION: &[u8] = b"node_version";
-const STATS_TIMEDIFF: &[u8] = b"timediff";
-const STATS_SHARDS_TIMEDIFF: &[u8] = b"shards_timediff";
-const STATS_IN_CURRENT_VSET: &[u8] = b"in_current_vset_p34";
-const STATS_CURRENT_VSET_ADNL: &[u8] = b"current_vset_p34_adnl_id";
-const STATS_IN_NEXT_VSET: &[u8] = b"in_next_vset_p36";
-const STATS_NEXT_VSET_ADNL: &[u8] = b"next_vset_p36_adnl_id";
-const STATS_LAST_APPLIED_MC_BLOCK: &[u8] = b"last_applied_masterchain_block_id";
-
-#[derive(Copy, Clone, Debug)]
-pub enum ValidatorSetEntry {
-    None,
-    Validator([u8; 32]),
+pub struct ConfigWithId {
+    pub block_id: ton_block::BlockIdExt,
+    pub config: ton_block::ConfigParams,
 }
 
-#[derive(Copy, Clone, Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SyncStatus {
-    StartBoot,
-    LoadMasterState,
-    LoadShardStates,
-    FinishBoot,
-    SynchronizationByBlocks,
-    SynchronizationFinished,
-    CheckingDb,
-    DbBroken,
-    NoSetStatus,
+pub struct ConfigParamWithId {
+    pub block_id: ton_block::BlockIdExt,
+    pub param: String,
 }
 
 fn expect_success(_: proto::Success) {}
@@ -347,11 +234,17 @@ pub enum NodeRpcError {
     #[error("query timeout")]
     QueryTimeout,
     #[error("invalid stats")]
-    InvalidStats,
+    InvalidStats(#[source] StatsError),
     #[error("invalid pubkey")]
     InvalidPubkey,
     #[error("invalid signature")]
     InvalidSignature,
     #[error("invalid string")]
     InvalidString,
+    #[error("invalid account state")]
+    InvalidAccountState,
+    #[error("invalid block id")]
+    InvalidBlockId,
+    #[error("invalid blockchain config")]
+    InvalidBlockchainConfig,
 }

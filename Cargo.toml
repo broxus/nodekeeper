@@ -1,5 +1,5 @@
 [package]
-name = "stever-node-tools"
+name = "stever"
 version = "0.1.0"
 edition = "2021"
 
@@ -9,6 +9,7 @@ anyhow = "1.0.65"
 argh = "0.1.9"
 base64 = "0.13.0"
 broxus-util = "0.1.5"
+config = { version = "0.13.2", default-features = false, features = ["json", "yaml", "toml"] }
 ctr = "0.9"
 dashmap = "5.4.0"
 everscale-crypto = { version = "0.1.4", features = ["tl-proto"] }
