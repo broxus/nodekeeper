@@ -41,21 +41,6 @@ pub struct AddValidatorPermanentKey<'tl> {
 #[derive(Copy, Clone, TlWrite)]
 #[tl(
     boxed,
-    id = "engine.validator.addValidatorTempKey",
-    scheme = "proto.tl"
-)]
-pub struct AddValidatorTempKey<'tl> {
-    #[tl(size_hint = 32)]
-    pub permanent_key_hash: HashRef<'tl>,
-    #[tl(size_hint = 32)]
-    pub key_hash: HashRef<'tl>,
-    #[tl(size_hint = 4)]
-    pub ttl: u32,
-}
-
-#[derive(Copy, Clone, TlWrite)]
-#[tl(
-    boxed,
     id = "engine.validator.addValidatorAdnlAddress",
     scheme = "proto.tl"
 )]
@@ -66,15 +51,6 @@ pub struct AddValidatorAdnlAddress<'tl> {
     pub key_hash: HashRef<'tl>,
     #[tl(size_hint = 4)]
     pub ttl: u32,
-}
-
-#[derive(Copy, Clone, TlWrite)]
-#[tl(boxed, id = "engine.validator.addAdnlId", scheme = "proto.tl")]
-pub struct AddAdnlId<'tl> {
-    #[tl(size_hint = 32)]
-    pub key_hash: HashRef<'tl>,
-    #[tl(size_hint = 4)]
-    pub category: u32,
 }
 
 #[derive(Copy, Clone, TlWrite)]

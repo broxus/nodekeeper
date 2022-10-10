@@ -43,9 +43,7 @@ engine.validator.generateKeyPair = engine.validator.KeyHash;
 engine.validator.exportPublicKey key_hash:int256 = PublicKey;
 engine.validator.sign key_hash:int256 data:bytes = engine.validator.Signature;
 engine.validator.addValidatorPermanentKey key_hash:int256 election_date:int ttl:int = engine.validator.Success;
-engine.validator.addValidatorTempKey permanent_key_hash:int256 key_hash:int256 ttl:int = engine.validator.Success;
 engine.validator.addValidatorAdnlAddress permanent_key_hash:int256 key_hash:int256 ttl:int = engine.validator.Success;
-engine.validator.addAdnlId key_hash:int256 category:int = engine.validator.Success;
 engine.validator.getStats = engine.validator.Stats;
 engine.validator.setStatesGcInterval interval_ms:int = engine.validator.Success;
 

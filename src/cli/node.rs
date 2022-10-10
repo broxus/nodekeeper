@@ -49,25 +49,12 @@ impl Cmd {
                     .await?;
                 serde_json::json!({})
             }
-            SubCmd::AddTempKey(cmd) => {
-                let permanent_key_hash = parse_key_hash(&cmd.permanent_key_hash)?;
-                let key_hash = parse_key_hash(&cmd.key_hash)?;
-                rpc_node
-                    .add_validator_temp_key(&permanent_key_hash, &key_hash, cmd.ttl)
-                    .await?;
-                serde_json::json!({})
-            }
             SubCmd::AddValidatorAddr(cmd) => {
                 let permanent_key_hash = parse_key_hash(&cmd.permanent_key_hash)?;
                 let key_hash = parse_key_hash(&cmd.key_hash)?;
                 rpc_node
                     .add_validator_adnl_address(&permanent_key_hash, &key_hash, cmd.ttl)
                     .await?;
-                serde_json::json!({})
-            }
-            SubCmd::AddAdnl(cmd) => {
-                let key_hash = parse_key_hash(&cmd.key_hash)?;
-                rpc_node.add_adnl_id(&key_hash, cmd.category).await?;
                 serde_json::json!({})
             }
             SubCmd::GetStats(_) => {
@@ -139,9 +126,7 @@ enum SubCmd {
     ExportPubKey(CmdNodeExportPubKey),
     Sign(CmdNodeSign),
     AddPermKey(CmdAddPermKey),
-    AddTempKey(CmdAddTempKey),
     AddValidatorAddr(CmdAddValidatorAddr),
-    AddAdnl(CmdAddAdnl),
     GetStats(CmdGetStats),
     SetStatesGcInterval(CmdSetStatesGcInterval),
     GetConfig(CmdGetConfig),
@@ -195,23 +180,6 @@ struct CmdAddPermKey {
 }
 
 #[derive(FromArgs)]
-/// Adds validator temporary key
-#[argh(subcommand, name = "addtempkey")]
-struct CmdAddTempKey {
-    /// permanent keypair hash (hex encoded string)
-    #[argh(positional)]
-    permanent_key_hash: String,
-
-    /// temp keypair hash (hex encoded string)
-    #[argh(positional)]
-    key_hash: String,
-
-    /// key ttl (in seconds)
-    #[argh(option, short = 't')]
-    ttl: u32,
-}
-
-#[derive(FromArgs)]
 /// Adds validator ADNL address
 #[argh(subcommand, name = "addvalidatoraddr")]
 struct CmdAddValidatorAddr {
@@ -226,19 +194,6 @@ struct CmdAddValidatorAddr {
     /// address ttl (in seconds)
     #[argh(option, short = 't')]
     ttl: u32,
-}
-
-#[derive(FromArgs)]
-/// Use key as ADNL address
-#[argh(subcommand, name = "addadnl")]
-struct CmdAddAdnl {
-    /// keypair hash (hex encoded string)
-    #[argh(positional)]
-    key_hash: String,
-
-    /// key category
-    #[argh(positional)]
-    category: u32,
 }
 
 #[derive(FromArgs)]

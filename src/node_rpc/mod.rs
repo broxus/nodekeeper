@@ -75,21 +75,6 @@ impl NodeRpc {
         .map(expect_success)
     }
 
-    pub async fn add_validator_temp_key(
-        &self,
-        permanent_key_hash: &[u8; 32],
-        key_hash: &[u8; 32],
-        ttl: u32,
-    ) -> Result<(), NodeRpcError> {
-        self.query(proto::AddValidatorTempKey {
-            permanent_key_hash,
-            key_hash,
-            ttl,
-        })
-        .await
-        .map(expect_success)
-    }
-
     pub async fn add_validator_adnl_address(
         &self,
         permanent_key_hash: &[u8; 32],
@@ -103,15 +88,6 @@ impl NodeRpc {
         })
         .await
         .map(expect_success)
-    }
-
-    pub async fn add_adnl_id(
-        &self,
-        key_hash: &[u8; 32],
-        category: u32,
-    ) -> Result<(), NodeRpcError> {
-        let proto::Success = self.query(proto::AddAdnlId { key_hash, category }).await?;
-        Ok(())
     }
 
     pub async fn get_stats(&self) -> Result<NodeStats, NodeRpcError> {
