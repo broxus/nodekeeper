@@ -2,6 +2,8 @@ use std::time::Duration;
 
 use anyhow::Result;
 use everscale_crypto::ed25519;
+use nekoton_abi::FunctionExt;
+use nekoton_utils::Clock;
 use tl_proto::{IntermediateBytes, TlRead, TlWrite};
 use ton_block::Deserializable;
 

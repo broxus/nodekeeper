@@ -1,11 +1,23 @@
 use std::hash::BuildHasherDefault;
 use std::io::Read;
+use std::path::Path;
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use dashmap::DashMap;
 
 pub type FxDashMap<K, V> = DashMap<K, V, BuildHasherDefault<rustc_hash::FxHasher>>;
+
+pub fn parse_contract_abi<P>(path: P) -> Result<ton_abi::Contract>
+where
+    P: AsRef<Path>,
+{
+    let data = std::fs::read(path.as_ref()).context("failed to read JSON ABI")?;
+    let mut jd = serde_json::Deserializer::from_slice(&data);
+    let contract: ton_abi::contract::SerdeContract =
+        serde_path_to_error::deserialize(&mut jd).context("failed to parse JSON ABI")?;
+    ton_abi::Contract::try_from(contract)
+}
 
 pub fn parse_address(address: &str) -> Result<ton_block::MsgAddressInt> {
     ton_block::MsgAddressInt::from_str(address).map_err(From::from)

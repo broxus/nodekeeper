@@ -5,6 +5,7 @@ use argh::FromArgs;
 
 use crate::config::Config;
 
+pub mod bc;
 pub mod exporter;
 pub mod node;
 
@@ -26,6 +27,7 @@ impl App {
         };
 
         match self.command {
+            Command::Bc(cmd) => cmd.run(ctx).await,
             Command::Exporter(cmd) => cmd.run(ctx).await,
             Command::Node(cmd) => cmd.run(ctx).await,
         }
@@ -35,6 +37,7 @@ impl App {
 #[derive(FromArgs)]
 #[argh(subcommand)]
 enum Command {
+    Bc(bc::Cmd),
     Exporter(exporter::Cmd),
     Node(node::Cmd),
 }
