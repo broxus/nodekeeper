@@ -34,10 +34,15 @@ impl Cmd {
                     .with_context(|| format!("method `{}` not found", cmd.method))?;
                 let input = nekoton_abi::parse_abi_tokens(&method.inputs, cmd.args)?;
 
+                let account_stuff = get_account_stuff(&node_rpc, &address).await?;
+
                 let nekoton_abi::ExecutionOutput {
                     result_code,
                     tokens,
-                } = run_local(&node_rpc, &clock, &address, method, &input).await?;
+                } = match cmd.responsible {
+                    false => method.run_local(&clock, account_stuff, &input)?,
+                    true => method.run_local_responsible(&clock, account_stuff, &input)?,
+                };
 
                 let output = tokens
                     .as_deref()
@@ -56,19 +61,15 @@ impl Cmd {
     }
 }
 
-pub async fn run_local(
+async fn get_account_stuff(
     node_rpc: &NodeRpc,
-    clock: &dyn Clock,
     address: &ton_block::MsgAddressInt,
-    method: &ton_abi::Function,
-    input: &[ton_abi::Token],
-) -> Result<nekoton_abi::ExecutionOutput> {
+) -> Result<ton_block::AccountStuff> {
     let state = node_rpc.get_shard_account_state(address).await?;
-    let account = match state.read_account()? {
-        ton_block::Account::Account(account) => account,
-        ton_block::Account::AccountNone => anyhow::bail!("account not deployed"),
-    };
-    method.run_local(clock, account, input)
+    match state.read_account()? {
+        ton_block::Account::Account(account) => Ok(account),
+        ton_block::Account::AccountNone => Err(anyhow::anyhow!("account not deployed")),
+    }
 }
 
 #[derive(FromArgs)]
@@ -96,6 +97,10 @@ struct CmdRun {
     /// contract address
     #[argh(option, long = "addr")]
     address: String,
+
+    /// execute method as responsible. (NOTE: requires first argument of type `uint32`)
+    #[argh(switch)]
+    responsible: bool,
 }
 
 fn default_args() -> serde_json::Value {
