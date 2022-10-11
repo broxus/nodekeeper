@@ -1,9 +1,7 @@
-use std::time::Duration;
+use std::{net::SocketAddr, time::Duration};
 
 use anyhow::Result;
 use everscale_crypto::ed25519;
-use nekoton_abi::FunctionExt;
-use nekoton_utils::Clock;
 use tl_proto::{IntermediateBytes, TlRead, TlWrite};
 use ton_block::Deserializable;
 
@@ -18,6 +16,7 @@ mod tcp_adnl;
 
 #[derive(Clone)]
 pub struct NodeRpc {
+    server_address: SocketAddr,
     tcp_adnl: TcpAdnl,
     query_timeout: Duration,
 }
@@ -36,9 +35,14 @@ impl NodeRpc {
         let query_timeout = config.query_timeout;
 
         Ok(Self {
+            server_address: config.server_address,
             tcp_adnl,
             query_timeout,
         })
+    }
+
+    pub fn connection(&self) -> &TcpAdnl {
+        &self.tcp_adnl
     }
 
     pub async fn generate_key_pair(&self) -> Result<[u8; 32], NodeRpcError> {

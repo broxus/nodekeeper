@@ -17,7 +17,7 @@ pub enum NodeStats {
 pub struct RunningStats {
     pub node_version: NodeVersion,
     #[serde(with = "serde_hex_array")]
-    pub overlay_id: [u8; 32],
+    pub overlay_adnl_id: [u8; 32],
     pub mc_time: u32,
     pub mc_time_diff: i32,
     pub sc_time_diff: i32,
@@ -36,7 +36,7 @@ impl TryFrom<proto::Stats> for NodeStats {
         let mut mc_time_diff = None;
         let mut sc_time_diff = None;
         let mut node_version = None;
-        let mut overlay_id = None;
+        let mut overlay_adnl_id = None;
         let mut in_current_vset = None;
         let mut current_vset_adnl = None;
         let mut in_next_vset = None;
@@ -63,9 +63,9 @@ impl TryFrom<proto::Stats> for NodeStats {
                     let str = parse_stat::<String>(&item.value)?;
                     node_version = Some(NodeVersion::from_str(&str)?);
                 }
-                STATS_PUBLIC_OVERLAY_ID => {
+                STATS_PUBLIC_OVERLAY_ADNL_ID => {
                     let KeyHash(id) = parse_stat::<KeyHash>(&item.value)?;
-                    overlay_id = Some(id);
+                    overlay_adnl_id = Some(id);
                 }
                 STATS_TIMEDIFF => {
                     mc_time_diff = Some(parse_stat::<i32>(&item.value)?);
@@ -139,7 +139,7 @@ impl TryFrom<proto::Stats> for NodeStats {
             sc_time_diff,
             last_mc_block,
             node_version,
-            overlay_id,
+            overlay_adnl_id,
         ) {
             (
                 Some(mc_time),
@@ -147,7 +147,7 @@ impl TryFrom<proto::Stats> for NodeStats {
                 Some(sc_time_diff),
                 Some(last_mc_block),
                 Some(node_version),
-                Some(overlay_id),
+                Some(overlay_adnl_id),
             ) => {
                 let in_current_vset = match (in_current_vset, current_vset_adnl) {
                     (Some(true), Some(KeyHash(adnl))) => ValidatorSetEntry::Validator(adnl),
@@ -169,7 +169,7 @@ impl TryFrom<proto::Stats> for NodeStats {
                     in_current_vset,
                     in_next_vset,
                     node_version,
-                    overlay_id,
+                    overlay_adnl_id: overlay_adnl_id,
                 }))
             }
             _ => Err(StatsError::FieldsMissing),
@@ -245,7 +245,7 @@ pub enum StatsError {
 const STATS_SYNC_STATUS: &[u8] = b"sync_status";
 const STATS_MC_BLOCK_TIME: &[u8] = b"masterchainblocktime";
 const STATS_NODE_VERSION: &[u8] = b"node_version";
-const STATS_PUBLIC_OVERLAY_ID: &[u8] = b"public_overlay_key_id";
+const STATS_PUBLIC_OVERLAY_ADNL_ID: &[u8] = b"public_overlay_key_id";
 const STATS_TIMEDIFF: &[u8] = b"timediff";
 const STATS_SHARDS_TIMEDIFF: &[u8] = b"shards_timediff";
 const STATS_IN_CURRENT_VSET: &[u8] = b"in_current_vset_p34";

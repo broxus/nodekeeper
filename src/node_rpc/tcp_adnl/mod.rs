@@ -59,6 +59,7 @@ impl TcpAdnl {
         let (tx, rx) = mpsc::unbounded_channel::<Packet>();
 
         let state = Arc::new(SharedState {
+            server_address: config.server_address,
             queries_cache: Arc::new(Default::default()),
             cancellation_token: Default::default(),
             packets_tx: tx,
@@ -80,6 +81,10 @@ impl TcpAdnl {
             .unwrap();
 
         Ok(Self { state })
+    }
+
+    pub fn addr(&self) -> &SocketAddr {
+        &&self.state.server_address
     }
 
     pub async fn query<Q, R>(&self, query: Q, timeout: Duration) -> Result<Option<R>, TcpAdnlError>
@@ -144,6 +149,7 @@ impl TcpAdnl {
 }
 
 struct SharedState {
+    server_address: SocketAddr,
     queries_cache: Arc<QueriesCache>,
     cancellation_token: CancellationToken,
     packets_tx: PacketsTx,
