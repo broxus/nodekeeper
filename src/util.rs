@@ -5,6 +5,8 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use dashmap::DashMap;
+use rustc_hash::FxHashMap;
+use ton_block::Deserializable;
 
 pub type FxDashMap<K, V> = DashMap<K, V, BuildHasherDefault<rustc_hash::FxHasher>>;
 
@@ -120,5 +122,57 @@ pub mod serde_block_id {
             block_id.root_hash,
             block_id.file_hash
         ))
+    }
+}
+
+pub struct BlockStuff {
+    id: ton_block::BlockIdExt,
+    block: ton_block::Block,
+}
+
+impl BlockStuff {
+    pub fn new(mut data: &[u8], id: ton_block::BlockIdExt) -> Result<Self> {
+        let file_hash = ton_types::UInt256::calc_file_hash(data);
+        anyhow::ensure!(id.file_hash() == file_hash, "wrong file_hash for {id}");
+
+        let root = ton_types::deserialize_tree_of_cells(&mut data)?;
+        anyhow::ensure!(
+            id.root_hash() == root.repr_hash(),
+            "wrong root hash for {id}"
+        );
+
+        let block = ton_block::Block::construct_from(&mut root.into())?;
+        Ok(Self { id, block })
+    }
+
+    #[inline(always)]
+    pub fn id(&self) -> &ton_block::BlockIdExt {
+        &self.id
+    }
+
+    #[inline(always)]
+    pub fn block(&self) -> &ton_block::Block {
+        &self.block
+    }
+
+    pub fn shard_blocks(&self) -> Result<FxHashMap<ton_block::ShardIdent, ton_block::BlockIdExt>> {
+        let mut shards = FxHashMap::default();
+        self.block()
+            .read_extra()?
+            .read_custom()?
+            .context("Given block is not a master block.")?
+            .hashes()
+            .iterate_shards(|ident, descr| {
+                let last_shard_block = ton_block::BlockIdExt {
+                    shard_id: ident,
+                    seq_no: descr.seq_no,
+                    root_hash: descr.root_hash,
+                    file_hash: descr.file_hash,
+                };
+                shards.insert(ident, last_shard_block);
+                Ok(true)
+            })?;
+
+        Ok(shards)
     }
 }

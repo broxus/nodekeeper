@@ -7,7 +7,7 @@ use argh::FromArgs;
 
 use super::CliContext;
 use crate::exporter::{Exporter, ExporterTarget, FileExporterTarget, HttpExporterTarget, Metrics};
-use crate::node_rpc::NodeRpc;
+use crate::node_tcp_rpc::NodeTcpRpc;
 
 #[derive(FromArgs)]
 /// Prometheus metrics exporter
@@ -33,7 +33,7 @@ pub struct Cmd {
 impl Cmd {
     pub async fn run(self, mut ctx: CliContext) -> Result<()> {
         let config = ctx.load_config()?;
-        let node_rpc = NodeRpc::new(&config).await?;
+        let node_rpc = NodeTcpRpc::new(&config).await?;
 
         match (self.once, self.file, self.addr) {
             (_, None, None) => Err(ExporterError::NoExporters.into()),

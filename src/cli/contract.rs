@@ -7,8 +7,8 @@ use nekoton_abi::FunctionExt;
 
 use super::CliContext;
 use crate::global_config::GlobalConfig;
-use crate::node_rpc::{NodeRpc, NodeStats};
-use crate::subscription::BlockSubscription;
+use crate::node_tcp_rpc::{NodeStats, NodeTcpRpc};
+use crate::node_udp_rpc::NodeUdpRpc;
 use crate::util::*;
 
 #[derive(FromArgs)]
@@ -22,7 +22,7 @@ pub struct Cmd {
 impl Cmd {
     pub async fn run(self, mut ctx: CliContext) -> Result<()> {
         let config = ctx.load_config()?;
-        let node_rpc = NodeRpc::new(&config).await?;
+        let node_rpc = NodeTcpRpc::new(&config).await?;
 
         let response = match self.subcommand {
             SubCmd::Call(cmd) => cmd.run(node_rpc).await?,
@@ -42,7 +42,7 @@ fn parse_contract_method(abi: &PathBuf, method: &str) -> Result<ton_abi::Functio
 }
 
 async fn get_account_stuff(
-    node_rpc: &NodeRpc,
+    node_rpc: &NodeTcpRpc,
     address: &ton_block::MsgAddressInt,
 ) -> Result<ton_block::AccountStuff> {
     let state = node_rpc.get_shard_account_state(address).await?;
@@ -85,7 +85,7 @@ struct CmdCall {
 }
 
 impl CmdCall {
-    async fn run(self, node_rpc: NodeRpc) -> Result<serde_json::Value> {
+    async fn run(self, node_rpc: NodeTcpRpc) -> Result<serde_json::Value> {
         let clock = nekoton_utils::SimpleClock;
 
         let address = parse_address(&self.address)?;
@@ -144,7 +144,7 @@ struct CmdSend {
 }
 
 impl CmdSend {
-    async fn run(self, node_rpc: NodeRpc) -> Result<serde_json::Value> {
+    async fn run(self, node_rpc: NodeTcpRpc) -> Result<serde_json::Value> {
         let address = parse_address(&self.address)?;
         let method = parse_contract_method(&self.abi, &self.method)?;
         let input = nekoton_abi::parse_abi_tokens(&method.inputs, self.args)?;
@@ -158,27 +158,14 @@ impl CmdSend {
 
         tracing::info!("STATS: {stats:?}");
 
-        let subscription = BlockSubscription::new(
+        let subscription = NodeUdpRpc::new(
             global_config,
             everscale_network::adnl::NodeIdShort::new(stats.overlay_adnl_id),
         )
         .await?;
 
-        let mut attempt = 0;
-        loop {
-            subscription.get_block(&stats.last_mc_block).await?;
-
-            let next = subscription
-                .get_next_block(&stats.last_mc_block, attempt)
-                .await?;
-            tracing::info!("Next block: {next:?}");
-            if next.is_some() {
-                break;
-            }
-
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            attempt += 1;
-        }
+        let next = subscription.get_next_block(&stats.last_mc_block).await?;
+        tracing::info!("BLOCK: {next:?}");
 
         Ok(Default::default())
     }

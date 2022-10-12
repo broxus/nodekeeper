@@ -7,6 +7,13 @@ pub struct PrepareBlock<'tl> {
     pub block_id: &'tl ton_block::BlockIdExt,
 }
 
+#[derive(Clone, TlWrite)]
+#[tl(boxed, id = "tonNode.downloadBlock", scheme = "proto.tl")]
+pub struct RpcDownloadBlock<'tl> {
+    #[tl(with = "tl_block_id")]
+    pub block_id: &'tl ton_block::BlockIdExt,
+}
+
 #[derive(Copy, Clone, TlWrite)]
 #[tl(boxed, id = "tonNode.downloadNextBlockFull", scheme = "proto.tl")]
 pub struct DownloadNextBlockFull<'tl> {
@@ -36,22 +43,6 @@ pub enum Prepared {
     NotFound,
     #[tl(id = "tonNode.prepared")]
     Found,
-}
-
-#[derive(TlWrite, TlRead)]
-#[tl(boxed, id = "tonNode.getCapabilities", scheme = "proto.tl")]
-pub struct GetCapabilities;
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq, TlRead)]
-#[tl(
-    boxed,
-    id = "tonNode.capabilities",
-    size_hint = 12,
-    scheme = "proto.tl"
-)]
-pub struct Capabilities {
-    pub version: u32,
-    pub capabilities: u64,
 }
 
 mod tl_block_id {

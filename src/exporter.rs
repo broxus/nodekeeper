@@ -8,17 +8,17 @@ use std::time::Duration;
 use anyhow::Result;
 use pomfrit::formatter::DisplayPrometheusExt;
 
-use crate::node_rpc::{NodeRpc, NodeStats, ValidatorSetEntry};
+use crate::node_tcp_rpc::{NodeTcpRpc, NodeStats, ValidatorSetEntry};
 
 pub struct Exporter {
-    node_rpc: NodeRpc,
+    node_rpc: NodeTcpRpc,
     interval: Duration,
     targets: Vec<Box<dyn ExporterTarget>>,
 }
 
 impl Exporter {
     pub fn new(
-        node_rpc: NodeRpc,
+        node_rpc: NodeTcpRpc,
         interval: Duration,
         targets: Vec<Box<dyn ExporterTarget>>,
     ) -> Self {

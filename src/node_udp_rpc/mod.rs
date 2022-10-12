@@ -1,5 +1,6 @@
 use std::net::SocketAddrV4;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use everscale_network::utils::PackedSocketAddr;
@@ -8,14 +9,13 @@ use futures_util::StreamExt;
 use parking_lot::Mutex;
 use rand::Rng;
 use tl_proto::{TlRead, TlWrite};
-use ton_block::Deserializable;
 
 use crate::global_config::GlobalConfig;
-use crate::node_rpc::{NodeRpc, NodeStats};
+use crate::util::BlockStuff;
 
 mod proto;
 
-pub struct BlockSubscription {
+pub struct NodeUdpRpc {
     local_id: adnl::NodeIdShort,
     peer_id: adnl::NodeIdShort,
     query_prefix: Vec<u8>,
@@ -24,7 +24,7 @@ pub struct BlockSubscription {
     roundtrip: Mutex<u64>,
 }
 
-impl BlockSubscription {
+impl NodeUdpRpc {
     pub async fn new(global_config: GlobalConfig, peer_id: adnl::NodeIdShort) -> Result<Self> {
         let ip_addr = public_ip::addr_v4()
             .await
@@ -90,38 +90,65 @@ impl BlockSubscription {
         })
     }
 
-    pub async fn get_capabilities(&self) -> Result<proto::Capabilities> {
-        self.adnl_query(proto::GetCapabilities, 1000).await
-    }
-
-    pub async fn get_block(
-        &self,
-        block_id: &ton_block::BlockIdExt,
-    ) -> Result<Option<ton_block::Block>> {
-        // Prepare
-        let prepare: proto::Prepared = self
-            .adnl_query(proto::PrepareBlock { block_id }, 1000)
-            .await?;
-
-        println!("PREPARED: {prepare:?}");
-
-        Ok(None)
-    }
-
     pub async fn get_next_block(
         &self,
         prev_block_id: &ton_block::BlockIdExt,
-        attempt: u64,
-    ) -> Result<Option<ton_block::Block>> {
-        let data = self
-            .rldp_query(proto::DownloadNextBlockFull { prev_block_id }, attempt)
-            .await?;
+    ) -> Result<BlockStuff> {
+        let mut timeouts = BLOCK_TIMEOUTS;
 
-        match tl_proto::deserialize::<proto::DataFull>(&data)? {
-            proto::DataFull::Found {
-                block: block_data, ..
-            } => Ok(Some(ton_block::Block::construct_from_bytes(block_data)?)),
-            proto::DataFull::Empty => Ok(None),
+        let mut attempt = 0;
+        loop {
+            let data = self
+                .rldp_query(proto::DownloadNextBlockFull { prev_block_id }, attempt)
+                .await?;
+
+            match data.as_deref().map(tl_proto::deserialize) {
+                // Received valid block
+                Some(Ok(proto::DataFull::Found {
+                    block_id, block, ..
+                })) => break BlockStuff::new(block, block_id),
+                // Received invalid response
+                Some(Err(e)) => break Err(e.into()),
+                // Received empty response or nothing (due to timeout)
+                Some(Ok(proto::DataFull::Empty)) | None => {
+                    tracing::debug!("next block not found");
+                    timeouts.sleep_and_update().await;
+                    attempt += 1;
+                }
+            }
+        }
+    }
+
+    pub async fn get_block(&self, block_id: &ton_block::BlockIdExt) -> Result<BlockStuff> {
+        let mut timeouts = BLOCK_TIMEOUTS;
+        loop {
+            match self
+                .adnl_query(proto::PrepareBlock { block_id }, 1000)
+                .await?
+            {
+                proto::Prepared::Found => break,
+                proto::Prepared::NotFound => {
+                    tracing::debug!("block not found");
+                    timeouts.sleep_and_update().await;
+                }
+            }
+        }
+
+        timeouts = BLOCK_TIMEOUTS;
+        let mut attempt = 0;
+        loop {
+            let data = self
+                .rldp_query(proto::RpcDownloadBlock { block_id }, attempt)
+                .await?;
+
+            match data {
+                Some(block) => break BlockStuff::new(&block, block_id.clone()),
+                None => {
+                    tracing::debug!("block receiver timeout");
+                    timeouts.sleep_and_update().await;
+                    attempt += 1;
+                }
+            }
         }
     }
 
@@ -142,7 +169,7 @@ impl BlockSubscription {
             .context("timeout")
     }
 
-    async fn rldp_query<Q>(&self, query: Q, attempt: u64) -> Result<Vec<u8>>
+    async fn rldp_query<Q>(&self, query: Q, attempt: u64) -> Result<Option<Vec<u8>>>
     where
         Q: TlWrite,
     {
@@ -167,16 +194,44 @@ impl BlockSubscription {
             .query(&self.local_id, &self.peer_id, query_data, roundtrip)
             .await?;
 
-        let answer = answer.context("timeout")?;
-
-        let mut current_roundtrip = self.roundtrip.lock();
-        if *current_roundtrip > 0 {
-            *current_roundtrip = (*current_roundtrip + roundtrip) / 2;
-        } else {
-            *current_roundtrip = roundtrip;
+        if answer.is_some() {
+            let mut current_roundtrip = self.roundtrip.lock();
+            if *current_roundtrip > 0 {
+                *current_roundtrip = (*current_roundtrip + roundtrip) / 2;
+            } else {
+                *current_roundtrip = roundtrip;
+            }
         }
 
         Ok(answer)
+    }
+}
+
+const BLOCK_TIMEOUTS: DownloaderTimeouts = DownloaderTimeouts {
+    initial: 200,
+    max: 1000,
+    multiplier: 1.2,
+};
+
+#[derive(Debug, Copy, Clone)]
+pub struct DownloaderTimeouts {
+    /// Milliseconds
+    pub initial: u64,
+    /// Milliseconds
+    pub max: u64,
+
+    pub multiplier: f64,
+}
+
+impl DownloaderTimeouts {
+    async fn sleep_and_update(&mut self) {
+        tokio::time::sleep(Duration::from_millis(self.initial)).await;
+        self.update();
+    }
+
+    fn update(&mut self) -> u64 {
+        self.initial = std::cmp::min(self.max, (self.initial as f64 * self.multiplier) as u64);
+        self.initial
     }
 }
 

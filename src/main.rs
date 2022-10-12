@@ -4,8 +4,8 @@ mod cli;
 mod config;
 mod exporter;
 mod global_config;
-mod node_rpc;
-mod subscription;
+mod node_tcp_rpc;
+mod node_udp_rpc;
 mod util;
 
 #[tokio::main]

@@ -15,13 +15,13 @@ mod stats;
 mod tcp_adnl;
 
 #[derive(Clone)]
-pub struct NodeRpc {
+pub struct NodeTcpRpc {
     server_address: SocketAddr,
     tcp_adnl: TcpAdnl,
     query_timeout: Duration,
 }
 
-impl NodeRpc {
+impl NodeTcpRpc {
     pub async fn new(config: &Config) -> Result<Self, NodeRpcError> {
         let tcp_adnl = TcpAdnl::connect(TcpAdnlConfig {
             server_address: config.server_address,
