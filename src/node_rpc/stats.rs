@@ -121,8 +121,8 @@ impl TryFrom<proto::Stats> for NodeStats {
                     last_mc_block = Some(ton_block::BlockIdExt {
                         shard_id,
                         seq_no: block.seq_no,
-                        file_hash: block.rh.into(),
-                        root_hash: block.fh.into(),
+                        root_hash: block.rh.into(),
+                        file_hash: block.fh.into(),
                     });
                 }
                 _ => {}

@@ -1627,6 +1627,7 @@ dependencies = [
  "async-trait",
  "base64",
  "broxus-util",
+ "bytes",
  "config",
  "ctr",
  "dashmap",

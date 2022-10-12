@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use argh::FromArgs;
@@ -6,7 +7,7 @@ use nekoton_abi::FunctionExt;
 
 use super::CliContext;
 use crate::global_config::GlobalConfig;
-use crate::node_rpc::NodeRpc;
+use crate::node_rpc::{NodeRpc, NodeStats};
 use crate::subscription::BlockSubscription;
 use crate::util::*;
 
@@ -150,8 +151,34 @@ impl CmdSend {
 
         let global_config = GlobalConfig::load(self.global_config)?;
 
-        let subscription = BlockSubscription::new(node_rpc, global_config).await?;
-        println!("CAPABILITIES: {:?}", subscription.get_capabilities().await?);
+        let stats = match node_rpc.get_stats().await? {
+            NodeStats::Running(stats) => stats,
+            NodeStats::NotReady => anyhow::bail!("node is not ready"),
+        };
+
+        tracing::info!("STATS: {stats:?}");
+
+        let subscription = BlockSubscription::new(
+            global_config,
+            everscale_network::adnl::NodeIdShort::new(stats.overlay_adnl_id),
+        )
+        .await?;
+
+        let mut attempt = 0;
+        loop {
+            subscription.get_block(&stats.last_mc_block).await?;
+
+            let next = subscription
+                .get_next_block(&stats.last_mc_block, attempt)
+                .await?;
+            tracing::info!("Next block: {next:?}");
+            if next.is_some() {
+                break;
+            }
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            attempt += 1;
+        }
 
         Ok(Default::default())
     }

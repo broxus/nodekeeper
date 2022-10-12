@@ -5,7 +5,10 @@ use anyhow::{Context, Result};
 use everscale_network::utils::PackedSocketAddr;
 use everscale_network::{adnl, dht, overlay, rldp, NetworkBuilder};
 use futures_util::StreamExt;
+use parking_lot::Mutex;
 use rand::Rng;
+use tl_proto::{TlRead, TlWrite};
+use ton_block::Deserializable;
 
 use crate::global_config::GlobalConfig;
 use crate::node_rpc::{NodeRpc, NodeStats};
@@ -13,22 +16,16 @@ use crate::node_rpc::{NodeRpc, NodeStats};
 mod proto;
 
 pub struct BlockSubscription {
-    node_rpc: NodeRpc,
     local_id: adnl::NodeIdShort,
     peer_id: adnl::NodeIdShort,
     query_prefix: Vec<u8>,
     adnl: Arc<adnl::Node>,
-    dht: Arc<dht::Node>,
     rldp: Arc<rldp::Node>,
+    roundtrip: Mutex<u64>,
 }
 
 impl BlockSubscription {
-    pub async fn new(node_rpc: NodeRpc, global_config: GlobalConfig) -> Result<Self> {
-        let stats = match node_rpc.get_stats().await? {
-            NodeStats::Running(stats) => stats,
-            NodeStats::NotReady => anyhow::bail!("node is not ready"),
-        };
-
+    pub async fn new(global_config: GlobalConfig, peer_id: adnl::NodeIdShort) -> Result<Self> {
         let ip_addr = public_ip::addr_v4()
             .await
             .context("failed to resolve public ip")?;
@@ -37,13 +34,18 @@ impl BlockSubscription {
             .with_tagged_key(rand::thread_rng().gen(), 0)?
             .build();
 
+        let rldp_options = rldp::NodeOptions {
+            force_compression: true,
+            ..Default::default()
+        };
+
         let (adnl, dht, rldp) = NetworkBuilder::with_adnl(
             SocketAddrV4::new(ip_addr, 30001),
             keystore,
             Default::default(),
         )
         .with_dht(0, Default::default())
-        .with_rldp(Default::default())
+        .with_rldp(rldp_options)
         .build()?;
 
         let mut static_nodes = Vec::new();
@@ -67,7 +69,6 @@ impl BlockSubscription {
             overlay: overlay_id.as_slice(),
         });
 
-        let peer_id = adnl::NodeIdShort::new(stats.overlay_adnl_id);
         let (peer_ip_address, peer_full_id) = resolve_ip(&dht, &peer_id).await?;
 
         let local_id = *adnl.key_by_tag(0)?.id();
@@ -80,27 +81,102 @@ impl BlockSubscription {
         )?;
 
         Ok(Self {
-            node_rpc,
             local_id,
             peer_id,
             query_prefix,
             adnl,
             rldp,
-            dht,
+            roundtrip: Default::default(),
         })
     }
 
     pub async fn get_capabilities(&self) -> Result<proto::Capabilities> {
+        self.adnl_query(proto::GetCapabilities, 1000).await
+    }
+
+    pub async fn get_block(
+        &self,
+        block_id: &ton_block::BlockIdExt,
+    ) -> Result<Option<ton_block::Block>> {
+        // Prepare
+        let prepare: proto::Prepared = self
+            .adnl_query(proto::PrepareBlock { block_id }, 1000)
+            .await?;
+
+        println!("PREPARED: {prepare:?}");
+
+        Ok(None)
+    }
+
+    pub async fn get_next_block(
+        &self,
+        prev_block_id: &ton_block::BlockIdExt,
+        attempt: u64,
+    ) -> Result<Option<ton_block::Block>> {
+        let data = self
+            .rldp_query(proto::DownloadNextBlockFull { prev_block_id }, attempt)
+            .await?;
+
+        match tl_proto::deserialize::<proto::DataFull>(&data)? {
+            proto::DataFull::Found {
+                block: block_data, ..
+            } => Ok(Some(ton_block::Block::construct_from_bytes(block_data)?)),
+            proto::DataFull::Empty => Ok(None),
+        }
+    }
+
+    async fn adnl_query<Q, R>(&self, query: Q, timeout: u64) -> Result<R>
+    where
+        Q: TlWrite,
+        for<'a> R: TlRead<'a, Repr = tl_proto::Boxed> + 'static,
+    {
         self.adnl
             .query_with_prefix(
                 &self.local_id,
                 &self.peer_id,
                 &self.query_prefix,
-                proto::GetCapabilities,
-                None,
+                query,
+                Some(timeout),
             )
             .await?
-            .context("query timeout")
+            .context("timeout")
+    }
+
+    async fn rldp_query<Q>(&self, query: Q, attempt: u64) -> Result<Vec<u8>>
+    where
+        Q: TlWrite,
+    {
+        const ATTEMPT_INTERVAL: u64 = 50; // milliseconds
+
+        let prefix = &self.query_prefix;
+        let mut query_data = Vec::with_capacity(prefix.len() + query.max_size_hint());
+        query_data.extend_from_slice(prefix);
+        query.write_to(&mut query_data);
+
+        let roundtrip = {
+            let roundtrip = *self.roundtrip.lock();
+            if roundtrip > 0 {
+                Some(roundtrip + attempt * ATTEMPT_INTERVAL)
+            } else {
+                None
+            }
+        };
+
+        let (answer, roundtrip) = self
+            .rldp
+            .query(&self.local_id, &self.peer_id, query_data, roundtrip)
+            .await?;
+
+        let answer = answer.context("timeout")?;
+
+        let mut current_roundtrip = self.roundtrip.lock();
+        if *current_roundtrip > 0 {
+            *current_roundtrip = (*current_roundtrip + roundtrip) / 2;
+        } else {
+            *current_roundtrip = roundtrip;
+        }
+
+        Ok(answer)
     }
 }
 
