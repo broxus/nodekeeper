@@ -13,6 +13,15 @@ pub enum NodeStats {
     NotReady,
 }
 
+impl NodeStats {
+    pub fn try_into_running(self) -> Result<RunningStats, StatsError> {
+        match self {
+            Self::Running(stats) => Ok(stats),
+            Self::NotReady => Err(StatsError::NotReady),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct RunningStats {
     pub node_version: NodeVersion,
@@ -236,6 +245,8 @@ pub enum SyncStatus {
 
 #[derive(thiserror::Error, Debug)]
 pub enum StatsError {
+    #[error("node is not ready")]
+    NotReady,
     #[error("invalid value")]
     InvalidValue,
     #[error("fields missing")]

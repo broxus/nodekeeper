@@ -6,6 +6,7 @@ mod exporter;
 mod global_config;
 mod node_tcp_rpc;
 mod node_udp_rpc;
+mod subscription;
 mod util;
 
 #[tokio::main]

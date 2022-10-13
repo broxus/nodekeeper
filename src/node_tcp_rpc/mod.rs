@@ -107,11 +107,13 @@ impl NodeTcpRpc {
             .map(expect_success)
     }
 
-    pub async fn send_message(&self, message: &[u8]) -> Result<(), NodeRpcError> {
+    pub async fn send_message<T: AsRef<[u8]>>(&self, message: T) -> Result<(), NodeRpcError> {
         // NOTE: proto::Success is used here on purpose instead of SendMsgStatus
-        self.query(proto::SendMessage { body: message })
-            .await
-            .map(expect_success)
+        self.query(proto::SendMessage {
+            body: message.as_ref(),
+        })
+        .await
+        .map(expect_success)
     }
 
     pub async fn get_config_all(&self) -> Result<ConfigWithId, NodeRpcError> {

@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::time::Duration;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use argh::FromArgs;
@@ -9,6 +9,7 @@ use super::CliContext;
 use crate::global_config::GlobalConfig;
 use crate::node_tcp_rpc::{NodeStats, NodeTcpRpc};
 use crate::node_udp_rpc::NodeUdpRpc;
+use crate::subscription::Subscription;
 use crate::util::*;
 
 #[derive(FromArgs)]
@@ -144,28 +145,40 @@ struct CmdSend {
 }
 
 impl CmdSend {
-    async fn run(self, node_rpc: NodeTcpRpc) -> Result<serde_json::Value> {
+    async fn run(self, node_tcp_rpc: NodeTcpRpc) -> Result<serde_json::Value> {
         let address = parse_address(&self.address)?;
         let method = parse_contract_method(&self.abi, &self.method)?;
         let input = nekoton_abi::parse_abi_tokens(&method.inputs, self.args)?;
 
         let global_config = GlobalConfig::load(self.global_config)?;
 
-        let stats = match node_rpc.get_stats().await? {
+        let stats = match node_tcp_rpc.get_stats().await? {
             NodeStats::Running(stats) => stats,
             NodeStats::NotReady => anyhow::bail!("node is not ready"),
         };
 
         tracing::info!("STATS: {stats:?}");
 
-        let subscription = NodeUdpRpc::new(
-            global_config,
-            everscale_network::adnl::NodeIdShort::new(stats.overlay_adnl_id),
-        )
-        .await?;
+        let node_udp_rpc = Arc::new(
+            NodeUdpRpc::new(
+                global_config,
+                everscale_network::adnl::NodeIdShort::new(stats.overlay_adnl_id),
+            )
+            .await?,
+        );
 
-        let next = subscription.get_next_block(&stats.last_mc_block).await?;
-        tracing::info!("BLOCK: {next:?}");
+        let test_message =
+            ton_block::Message::with_ext_in_header(ton_block::ExternalInboundMessageHeader {
+                dst: "-1:3333333333333333333333333333333333333333333333333333333333333333"
+                    .parse()?,
+                ..Default::default()
+            });
+        let expire_at = broxus_util::now();
+
+        let subscription = Subscription::new(node_tcp_rpc, node_udp_rpc);
+        subscription.send_message(&test_message, expire_at).await?;
+
+        // let next = subscription.get_next_block(&stats.last_mc_block).await?;
 
         Ok(Default::default())
     }
