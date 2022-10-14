@@ -2,7 +2,7 @@ use std::collections::hash_map;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use arc_swap::ArcSwapOption;
 use rustc_hash::FxHashMap;
 use tokio::sync::{oneshot, Notify};
@@ -37,7 +37,7 @@ impl Subscription {
             sc_pending_messages: Default::default(),
         });
 
-        // TODO: spawn
+        tokio::spawn(walk_blocks(Arc::downgrade(&subscription)));
 
         subscription
     }
@@ -73,7 +73,10 @@ impl Subscription {
             let rx = match pending_messages.entry(message_hash) {
                 hash_map::Entry::Vacant(entry) => {
                     let (tx, rx) = oneshot::channel();
-                    entry.insert(PendingMessage { expire_at, tx });
+                    entry.insert(PendingMessage {
+                        expire_at,
+                        tx: Some(tx),
+                    });
                     rx
                 }
                 hash_map::Entry::Occupied(_) => anyhow::bail!("message already sent"),
@@ -104,7 +107,7 @@ impl Subscription {
             return Err(e.into());
         }
 
-        // Wait message execution
+        // Wait for the message execution
         match rx.await? {
             Some(tx) => Ok(tx),
             None => anyhow::bail!("message expired"),
@@ -119,16 +122,19 @@ impl Subscription {
         let next_mc_block = self
             .node_udp_rpc
             .get_next_block(last_mc_block.data.id())
-            .await?;
+            .await
+            .context("failed to get next block")?;
         let next_shard_block_ids = next_mc_block.shard_blocks()?;
         let next_mc_utime = {
             let info = next_mc_block.block().read_info()?;
             info.gen_utime().0
         };
 
+        tracing::info!("next shard blocks: {next_shard_block_ids:#?}");
+
         // Get all shard blocks between these masterchain blocks
         let mut tasks = Vec::with_capacity(next_shard_block_ids.len());
-        for (_, id) in next_shard_block_ids {
+        for id in next_shard_block_ids.values().cloned() {
             let last_mc_block = last_mc_block.clone();
             let rpc = self.node_udp_rpc.clone();
             tasks.push(tokio::spawn(async move {
@@ -162,22 +168,40 @@ impl Subscription {
         for task in tasks {
             let blocks = task.await??;
             for (_, item) in blocks {
-                process_block(item.block(), &self.sc_pending_messages)?;
+                self.process_block(item.block(), &self.sc_pending_messages)?;
             }
         }
-        process_block(next_mc_block.block(), &self.mc_pending_messages)?;
+        self.process_block(next_mc_block.block(), &self.mc_pending_messages)?;
 
         // Remove expired messages
-        remove_expired_messages(&self.mc_pending_messages, next_mc_utime);
-        remove_expired_messages(&self.sc_pending_messages, next_mc_utime);
+        self.remove_expired_messages(&self.mc_pending_messages, next_mc_utime);
+        self.remove_expired_messages(&self.sc_pending_messages, next_mc_utime);
+
+        // Update last mc block
+        let shards_edge = Edge(
+            next_shard_block_ids
+                .into_iter()
+                .map(|(shard, id)| (shard, id.seq_no))
+                .collect(),
+        );
+
+        self.last_mc_block.store(Some(Arc::new(StoredMcBlock {
+            gen_utime: next_mc_utime,
+            data: next_mc_block,
+            shards_edge,
+        })));
 
         // Done
-        Ok(!self.mc_pending_messages.is_empty() || self.sc_pending_messages.is_empty())
+        Ok(self.pending_message_count.load(Ordering::Acquire) > 0)
     }
 
     async fn get_last_mc_block(&self) -> Result<Arc<StoredMcBlock>> {
-        if let Some(last_mc_block) = self.last_mc_block.load_full() {
-            return Ok(last_mc_block);
+        let now = broxus_util::now();
+        if let Some(last_mc_block) = &*self.last_mc_block.load() {
+            if last_mc_block.gen_utime + LAST_MC_BLOCK_TTL_SEC > now {
+                tracing::debug!("reusing saved masterchain block");
+                return Ok(last_mc_block.clone());
+            }
         }
 
         let stats = self.node_tcp_rpc.get_stats().await?;
@@ -199,51 +223,97 @@ impl Subscription {
         self.last_mc_block.store(Some(block.clone()));
         Ok(block)
     }
+
+    fn process_block(
+        &self,
+        block: &ton_block::Block,
+        pending_messages: &PendingMessages,
+    ) -> Result<()> {
+        use ton_block::HashmapAugType;
+
+        let counter = &self.pending_message_count;
+        let extra = block.read_extra()?;
+        let account_blocks = extra.read_account_blocks()?;
+
+        account_blocks.iterate_with_keys(|address, account_block| {
+            let mut pending_messages = match pending_messages.get_mut(&address) {
+                Some(pending_messages) => pending_messages,
+                None => return Ok(true),
+            };
+
+            account_block
+                .transactions()
+                .iterate_slices_with_keys(|_, tx| {
+                    let cell = tx.reference(0)?;
+                    let repr_hash = cell.repr_hash();
+                    let tx = ton_block::Transaction::construct_from_cell(cell)?;
+                    let in_msg_hash = match &tx.in_msg {
+                        Some(in_msg) => in_msg.hash(),
+                        None => return Ok(true),
+                    };
+
+                    let mut pending_message = match pending_messages.remove(&in_msg_hash) {
+                        Some(pending_message) => pending_message,
+                        None => return Ok(true),
+                    };
+
+                    counter.fetch_sub(1, Ordering::Release);
+
+                    if let Some(channel) = pending_message.tx.take() {
+                        channel.send(Some(tx)).ok();
+                    }
+
+                    Ok(true)
+                })?;
+
+            Ok(true)
+        })?;
+
+        Ok(())
+    }
+
+    fn remove_expired_messages(&self, pending_messages: &PendingMessages, utime: u32) {
+        let counter = &self.pending_message_count;
+
+        pending_messages.retain(|_, pending_messages| {
+            pending_messages.retain(|_, message| {
+                let is_invalid = message.expire_at < utime;
+                if is_invalid {
+                    counter.fetch_sub(1, Ordering::Release);
+                }
+                !is_invalid
+            });
+            !pending_messages.is_empty()
+        });
+    }
 }
 
-fn remove_expired_messages(pending_messages: &PendingMessages, utime: u32) {
-    pending_messages.retain(|_, pending_messages| {
-        pending_messages.retain(|_, message| message.expire_at > utime);
-        !pending_messages.is_empty()
-    });
-}
-
-fn process_block(block: &ton_block::Block, pending_messages: &PendingMessages) -> Result<()> {
-    use ton_block::HashmapAugType;
-
-    let extra = block.read_extra()?;
-    let account_blocks = extra.read_account_blocks()?;
-
-    account_blocks.iterate_with_keys(|address, account_block| {
-        let mut pending_messages = match pending_messages.get_mut(&address) {
-            Some(pending_messages) => pending_messages,
-            None => return Ok(true),
+async fn walk_blocks(subscription: Weak<Subscription>) {
+    loop {
+        let subscription = match subscription.upgrade() {
+            Some(subscription) => subscription,
+            None => return,
         };
 
-        account_block
-            .transactions()
-            .iterate_slices_with_keys(|_, tx| {
-                let cell = tx.reference(0)?;
-                let repr_hash = cell.repr_hash();
-                let tx = ton_block::Transaction::construct_from_cell(cell)?;
-                let in_msg_hash = match &tx.in_msg {
-                    Some(in_msg) => in_msg.hash(),
-                    None => return Ok(true),
-                };
+        let pending_messages_changed = subscription.pending_messages_changed.clone();
+        let signal = pending_messages_changed.notified();
 
-                let pending_message = match pending_messages.remove(&in_msg_hash) {
-                    Some(pending_message) => pending_message,
-                    None => return Ok(true),
-                };
+        if subscription.pending_message_count.load(Ordering::Acquire) > 0 {
+            loop {
+                match subscription.make_blocks_step().await {
+                    Ok(true) => continue,
+                    Ok(false) => break,
+                    Err(e) => {
+                        tracing::error!("failed to make blocks step: {e:?}");
+                    }
+                }
+            }
+        }
+        // drop(subscription);
 
-                pending_message.tx.send(Some(tx)).ok();
-                Ok(true)
-            })?;
-
-        Ok(true)
-    })?;
-
-    Ok(())
+        tracing::debug!("waiting for new messages");
+        signal.await;
+    }
 }
 
 struct StoredMcBlock {
@@ -270,5 +340,15 @@ impl Edge {
 
 struct PendingMessage {
     expire_at: u32,
-    tx: oneshot::Sender<Option<ton_block::Transaction>>,
+    tx: Option<oneshot::Sender<Option<ton_block::Transaction>>>,
 }
+
+impl Drop for PendingMessage {
+    fn drop(&mut self) {
+        if let Some(tx) = self.tx.take() {
+            tx.send(None).ok();
+        }
+    }
+}
+
+const LAST_MC_BLOCK_TTL_SEC: u32 = 10;

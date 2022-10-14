@@ -173,10 +173,12 @@ impl CmdSend {
                     .parse()?,
                 ..Default::default()
             });
-        let expire_at = broxus_util::now();
+        let expire_at = broxus_util::now() + 60;
 
         let subscription = Subscription::new(node_tcp_rpc, node_udp_rpc);
         subscription.send_message(&test_message, expire_at).await?;
+
+        tracing::info!("DONE");
 
         // let next = subscription.get_next_block(&stats.last_mc_block).await?;
 

@@ -5,7 +5,6 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use everscale_network::utils::PackedSocketAddr;
 use everscale_network::{adnl, dht, overlay, rldp, NetworkBuilder};
-use futures_util::StreamExt;
 use parking_lot::Mutex;
 use rand::Rng;
 use tl_proto::{TlRead, TlWrite};
@@ -48,18 +47,14 @@ impl NodeUdpRpc {
         .with_rldp(rldp_options)
         .build()?;
 
-        let mut static_nodes = Vec::new();
-        for peer in &global_config.dht_nodes {
-            if let Some(peer_id) = dht.add_dht_peer(peer.clone())? {
-                static_nodes.push(peer_id);
-            }
+        for peer in global_config.dht_nodes {
+            dht.add_dht_peer(peer.clone())?;
         }
 
         adnl.start()?;
 
-        let mut dht_node_count = static_nodes.len();
-        dht_node_count += search_dht_nodes(dht.as_ref(), &static_nodes).await?;
-        tracing::info!("total static nodes: {dht_node_count}");
+        let dht_node_count = dht.find_more_dht_nodes().await?;
+        tracing::info!("total DHT nodes: {dht_node_count}");
 
         let overlay_id_full =
             overlay::IdFull::for_shard_overlay(-1, global_config.zero_state.file_hash.as_slice());
@@ -100,7 +95,8 @@ impl NodeUdpRpc {
         loop {
             let data = self
                 .rldp_query(proto::DownloadNextBlockFull { prev_block_id }, attempt)
-                .await?;
+                .await
+                .context("rldp query failed")?;
 
             match data.as_deref().map(tl_proto::deserialize) {
                 // Received valid block
@@ -250,28 +246,4 @@ async fn resolve_ip(
             }
         }
     }
-}
-
-async fn search_dht_nodes(dht: &dht::Node, static_nodes: &[adnl::NodeIdShort]) -> Result<usize> {
-    let mut tasks = futures_util::stream::FuturesUnordered::new();
-    for peer_id in static_nodes {
-        tasks.push(async move {
-            let res = dht.query_dht_nodes(peer_id, 10, false).await;
-            (peer_id, res)
-        });
-    }
-
-    let mut node_count = 0;
-    while let Some((peer_id, res)) = tasks.next().await {
-        match res {
-            Ok(nodes) => {
-                for node in nodes {
-                    node_count += dht.add_dht_peer(node)?.is_some() as usize;
-                }
-            }
-            Err(e) => tracing::warn!("failed to get DHT nodes from {peer_id}: {e:?}"),
-        }
-    }
-
-    Ok(node_count)
 }
