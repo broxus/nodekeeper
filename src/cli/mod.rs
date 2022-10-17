@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use argh::FromArgs;
 
-use crate::config::Config;
+use crate::config::AppConfig;
 
 pub mod contract;
 pub mod exporter;
@@ -50,7 +50,7 @@ pub struct CliContext {
 }
 
 impl CliContext {
-    pub fn load_config(&mut self) -> Result<Config> {
+    pub fn load_config(&mut self) -> Result<AppConfig> {
         config::Config::builder()
             .add_source(config::File::from(self.config_path.as_path()))
             .add_source(config::Environment::default())

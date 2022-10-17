@@ -1,14 +1,14 @@
-use std::io::Write;
-use std::net::SocketAddr;
-use std::os::unix::fs::OpenOptionsExt;
-use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
 use pomfrit::formatter::DisplayPrometheusExt;
 
-use crate::node_tcp_rpc::{NodeTcpRpc, NodeStats, ValidatorSetEntry};
+pub use self::file_target::FileExporterTarget;
+pub use self::http_target::HttpExporterTarget;
+use crate::node_tcp_rpc::{NodeStats, NodeTcpRpc, ValidatorSetEntry};
+
+mod file_target;
+mod http_target;
 
 pub struct Exporter {
     node_rpc: NodeTcpRpc,
@@ -55,7 +55,7 @@ impl Exporter {
             };
 
             for target in &self.targets {
-                if let Err(e) = target.write(metrics) {
+                if let Err(e) = target.write(&metrics) {
                     tracing::warn!(
                         "failed to write metrics to the {}: {e:?}",
                         target.target_name()
@@ -69,7 +69,7 @@ impl Exporter {
 pub trait ExporterTarget {
     fn target_name(&self) -> &'static str;
 
-    fn write(&self, metrics: Metrics<'_>) -> Result<()>;
+    fn write(&self, metrics: &dyn std::fmt::Display) -> Result<()>;
 }
 
 #[derive(Copy, Clone)]
@@ -130,94 +130,6 @@ impl std::fmt::Display for Metrics<'_> {
                 .value(1)?,
         };
 
-        Ok(())
-    }
-}
-
-pub struct HttpExporterTarget {
-    state: Arc<parking_lot::RwLock<Option<(u32, NodeStats)>>>,
-    _exporter: Arc<pomfrit::MetricsExporter>,
-}
-
-impl HttpExporterTarget {
-    pub async fn new(addr: SocketAddr) -> Result<Self> {
-        let (exporter, writer) = pomfrit::create_exporter(Some(pomfrit::Config {
-            collection_interval_sec: 1,
-            listen_address: addr,
-            metrics_path: None,
-        }))
-        .await?;
-
-        let state = Arc::new(parking_lot::RwLock::default());
-        writer.spawn({
-            let state = state.clone();
-            move |writer| {
-                let metrics = state.read();
-                if let Some((collected_at, stats)) = &*metrics {
-                    writer.write(Metrics {
-                        collected_at: *collected_at,
-                        stats,
-                    });
-                }
-            }
-        });
-
-        Ok(Self {
-            state,
-            _exporter: exporter,
-        })
-    }
-}
-
-impl ExporterTarget for HttpExporterTarget {
-    fn target_name(&self) -> &'static str {
-        "http_exporter"
-    }
-
-    fn write(&self, metrics: Metrics<'_>) -> Result<()> {
-        let mut state = self.state.write();
-        *state = Some((metrics.collected_at, metrics.stats.clone()));
-        Ok(())
-    }
-}
-
-pub struct FileExporterTarget {
-    file_path: PathBuf,
-    temp_file_path: PathBuf,
-}
-
-impl FileExporterTarget {
-    pub fn new(path: PathBuf) -> Self {
-        let mut temp_extension = path.extension().unwrap_or_default().to_os_string();
-        temp_extension.push(std::ffi::OsString::from("temp"));
-
-        let mut temp_file_path = path.clone();
-        temp_file_path.set_extension(temp_extension);
-
-        Self {
-            file_path: path,
-            temp_file_path,
-        }
-    }
-}
-
-impl ExporterTarget for FileExporterTarget {
-    fn target_name(&self) -> &'static str {
-        "file_exporter"
-    }
-
-    fn write(&self, metrics: Metrics<'_>) -> Result<()> {
-        let mut temp_file = std::fs::OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .create(true)
-            .mode(0o644)
-            .open(&self.temp_file_path)?;
-
-        write!(temp_file, "{metrics}")?;
-        drop(temp_file);
-
-        std::fs::rename(&self.temp_file_path, &self.file_path)?;
         Ok(())
     }
 }

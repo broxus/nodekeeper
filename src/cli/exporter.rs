@@ -45,7 +45,7 @@ impl Cmd {
                     collected_at: broxus_util::now(),
                     stats: &stats,
                 };
-                exporter.write(metrics)
+                exporter.write(&metrics)
             }
             (false, file, addr) => {
                 let mut targets = Vec::<Box<dyn ExporterTarget>>::new();

@@ -5,7 +5,7 @@ use crate::crypto::{self, MnemonicType};
 use crate::util::*;
 
 #[derive(FromArgs)]
-///
+/// Seed utils
 #[argh(subcommand, name = "seed")]
 pub struct Cmd {
     #[argh(subcommand)]
