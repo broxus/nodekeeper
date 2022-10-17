@@ -1638,6 +1638,7 @@ dependencies = [
  "config",
  "ctr",
  "dashmap",
+ "ed25519-dalek",
  "everscale-crypto",
  "everscale-network",
  "futures-util",

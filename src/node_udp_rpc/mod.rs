@@ -14,13 +14,9 @@ use crate::util::BlockStuff;
 
 mod proto;
 
+#[derive(Clone)]
 pub struct NodeUdpRpc {
-    local_id: adnl::NodeIdShort,
-    peer_id: adnl::NodeIdShort,
-    query_prefix: Vec<u8>,
-    adnl: Arc<adnl::Node>,
-    rldp: Arc<rldp::Node>,
-    roundtrip: Mutex<u64>,
+    inner: Arc<NodeInner>,
 }
 
 impl NodeUdpRpc {
@@ -76,12 +72,14 @@ impl NodeUdpRpc {
         )?;
 
         Ok(Self {
-            local_id,
-            peer_id,
-            query_prefix,
-            adnl,
-            rldp,
-            roundtrip: Default::default(),
+            inner: Arc::new(NodeInner {
+                local_id,
+                peer_id,
+                query_prefix,
+                adnl,
+                rldp,
+                roundtrip: Default::default(),
+            }),
         })
     }
 
@@ -94,6 +92,7 @@ impl NodeUdpRpc {
         let mut attempt = 0;
         loop {
             let data = self
+                .inner
                 .rldp_query(proto::DownloadNextBlockFull { prev_block_id }, attempt)
                 .await
                 .context("rldp query failed")?;
@@ -119,6 +118,7 @@ impl NodeUdpRpc {
         let mut timeouts = BLOCK_TIMEOUTS;
         loop {
             match self
+                .inner
                 .adnl_query(proto::PrepareBlock { block_id }, 1000)
                 .await?
             {
@@ -134,6 +134,7 @@ impl NodeUdpRpc {
         let mut attempt = 0;
         loop {
             let data = self
+                .inner
                 .rldp_query(proto::RpcDownloadBlock { block_id }, attempt)
                 .await?;
 
@@ -147,7 +148,18 @@ impl NodeUdpRpc {
             }
         }
     }
+}
 
+struct NodeInner {
+    local_id: adnl::NodeIdShort,
+    peer_id: adnl::NodeIdShort,
+    query_prefix: Vec<u8>,
+    adnl: Arc<adnl::Node>,
+    rldp: Arc<rldp::Node>,
+    roundtrip: Mutex<u64>,
+}
+
+impl NodeInner {
     async fn adnl_query<Q, R>(&self, query: Q, timeout: u64) -> Result<R>
     where
         Q: TlWrite,

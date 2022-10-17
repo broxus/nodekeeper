@@ -171,14 +171,14 @@ impl TryFrom<proto::Stats> for NodeStats {
                 };
 
                 Ok(Self::Running(RunningStats {
+                    node_version,
+                    overlay_adnl_id,
                     mc_time,
                     mc_time_diff,
                     sc_time_diff,
                     last_mc_block,
                     in_current_vset,
                     in_next_vset,
-                    node_version,
-                    overlay_adnl_id: overlay_adnl_id,
                 }))
             }
             _ => Err(StatsError::FieldsMissing),

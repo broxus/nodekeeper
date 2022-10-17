@@ -1,11 +1,14 @@
+use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
+use broxus_util::serde_hex_array;
 use dashmap::DashMap;
 use rustc_hash::FxHashMap;
+use serde::Deserialize;
 use ton_block::Deserializable;
 
 pub type FxDashMap<K, V> = DashMap<K, V, BuildHasherDefault<rustc_hash::FxHasher>>;
@@ -45,6 +48,14 @@ pub fn parse_key_hash(hash: &str) -> Result<[u8; 32]> {
         .map_err(|_| anyhow::Error::msg("invalid key hash length"))
 }
 
+pub fn parse_optional_state_init(data: Option<String>) -> Result<Option<ton_block::StateInit>> {
+    data.as_deref().map(parse_state_init).transpose()
+}
+
+pub fn parse_state_init(data: &str) -> Result<ton_block::StateInit> {
+    ton_block::StateInit::construct_from_base64(data)
+}
+
 pub fn parse_hex_or_base64(data: &str) -> Result<Vec<u8>> {
     if let Some(hash) = data.strip_prefix("0x") {
         hex::decode(hash).map_err(From::from)
@@ -59,6 +70,29 @@ pub fn parse_hex_or_base64(data: &str) -> Result<Vec<u8>> {
     }
 }
 
+pub fn parse_keys(keys: Option<PathBuf>) -> Result<Option<ed25519_dalek::Keypair>> {
+    #[derive(Deserialize)]
+    struct StoredKeyPair {
+        #[serde(with = "serde_hex_array")]
+        secret: [u8; 32],
+    }
+
+    let path = match keys {
+        Some(path) => path,
+        None => return Ok(None),
+    };
+
+    let keypair = std::fs::read_to_string(path).context("failed to read keys")?;
+    let keypair =
+        serde_json::from_str::<StoredKeyPair>(&keypair).context("failed to parse keys")?;
+
+    let secret =
+        ed25519_dalek::SecretKey::from_bytes(&keypair.secret).context("invalid secret key")?;
+    let public = ed25519_dalek::PublicKey::from(&secret);
+
+    Ok(Some(ed25519_dalek::Keypair { secret, public }))
+}
+
 pub fn split_address(address: &ton_block::MsgAddressInt) -> Result<(i32, ton_types::UInt256)> {
     match address {
         ton_block::MsgAddressInt::AddrStd(ton_block::MsgAddrStd {
@@ -71,6 +105,22 @@ pub fn split_address(address: &ton_block::MsgAddressInt) -> Result<(i32, ton_typ
         )),
         ton_block::MsgAddressInt::AddrVar(_) => Err(anyhow::anyhow!("unsupported address")),
     }
+}
+
+pub fn make_default_headers(
+    pubkey: Option<ed25519_dalek::PublicKey>,
+    timeout: u32,
+) -> (u32, HashMap<String, ton_abi::TokenValue>) {
+    let time = broxus_util::now_ms_u64();
+    let expire_at = (time / 1000) as u32 + timeout;
+
+    let headers = HashMap::from([
+        ("time".to_owned(), ton_abi::TokenValue::Time(time)),
+        ("expire".to_owned(), ton_abi::TokenValue::Expire(expire_at)),
+        ("pubkey".to_owned(), ton_abi::TokenValue::PublicKey(pubkey)),
+    ]);
+
+    (expire_at, headers)
 }
 
 pub mod serde_public_key {

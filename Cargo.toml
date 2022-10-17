@@ -12,18 +12,11 @@ async-trait = "0.1.57"
 base64 = "0.13.0"
 bytes = "1.2"
 broxus-util = "0.1.5"
-config = { version = "0.13.2", default-features = false, features = [
-    "json",
-    "yaml",
-    "toml",
-] }
+config = { version = "0.13.2", default-features = false, features = ["json", "yaml", "toml"] }
 ctr = "0.9"
 dashmap = "5.4.0"
 everscale-crypto = { version = "0.1.4", features = ["tl-proto"] }
-everscale-network = { version = "0.3", default-features = false, features = [
-    "rldp",
-    "dht",
-] }
+everscale-network = { version = "0.3", default-features = false, features = ["rldp", "dht"] }
 futures-util = "0.3"
 generic-array = "0.14"
 hex = "0.4"
@@ -49,6 +42,8 @@ tokio = { version = "1", features = [
 tokio-util = "0.7"
 tracing = "0.1"
 tracing-subscriber = "0.3"
+
+ed25519-dalek = { git = "https://github.com/broxus/ed25519-dalek.git" }
 
 ton_abi = { git = "https://github.com/broxus/ton-labs-abi.git" }
 ton_block = { git = "https://github.com/broxus/ton-labs-block.git" }

@@ -83,10 +83,6 @@ impl TcpAdnl {
         Ok(Self { state })
     }
 
-    pub fn addr(&self) -> &SocketAddr {
-        &&self.state.server_address
-    }
-
     pub async fn query<Q, R>(&self, query: Q, timeout: Duration) -> Result<Option<R>, TcpAdnlError>
     where
         Q: TlWrite<Repr = tl_proto::Boxed>,

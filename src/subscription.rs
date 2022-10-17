@@ -10,11 +10,11 @@ use ton_block::{Deserializable, Serializable};
 
 use crate::node_tcp_rpc::NodeTcpRpc;
 use crate::node_udp_rpc::NodeUdpRpc;
-use crate::util::{split_address, BlockStuff, FxDashMap};
+use crate::util::{split_address, BlockStuff, FxDashMap, TransactionWithHash};
 
 pub struct Subscription {
     node_tcp_rpc: NodeTcpRpc,
-    node_udp_rpc: Arc<NodeUdpRpc>,
+    node_udp_rpc: NodeUdpRpc,
     last_mc_block: ArcSwapOption<StoredMcBlock>,
     pending_message_count: AtomicUsize,
     pending_messages_changed: Arc<Notify>,
@@ -26,7 +26,7 @@ type PendingMessages = FxDashMap<ton_types::UInt256, AccountPendingMessages>;
 type AccountPendingMessages = FxHashMap<ton_types::UInt256, PendingMessage>;
 
 impl Subscription {
-    pub fn new(node_tcp_rpc: NodeTcpRpc, node_udp_rpc: Arc<NodeUdpRpc>) -> Arc<Self> {
+    pub fn new(node_tcp_rpc: NodeTcpRpc, node_udp_rpc: NodeUdpRpc) -> Arc<Self> {
         let subscription = Arc::new(Self {
             node_tcp_rpc,
             node_udp_rpc,
@@ -46,7 +46,7 @@ impl Subscription {
         &self,
         message: &ton_block::Message,
         expire_at: u32,
-    ) -> Result<ton_block::Transaction> {
+    ) -> Result<Option<TransactionWithHash>> {
         // Prepare dst address
         let dst = match message.ext_in_header() {
             Some(header) => header.dst.clone(),
@@ -108,10 +108,7 @@ impl Subscription {
         }
 
         // Wait for the message execution
-        match rx.await? {
-            Some(tx) => Ok(tx),
-            None => anyhow::bail!("message expired"),
-        }
+        rx.await.map_err(From::from)
     }
 
     async fn make_blocks_step(&self) -> Result<bool> {
@@ -130,7 +127,7 @@ impl Subscription {
             info.gen_utime().0
         };
 
-        tracing::info!("next shard blocks: {next_shard_block_ids:#?}");
+        tracing::debug!("next shard blocks: {next_shard_block_ids:#?}");
 
         // Get all shard blocks between these masterchain blocks
         let mut tasks = Vec::with_capacity(next_shard_block_ids.len());
@@ -245,9 +242,9 @@ impl Subscription {
                 .transactions()
                 .iterate_slices_with_keys(|_, tx| {
                     let cell = tx.reference(0)?;
-                    let repr_hash = cell.repr_hash();
-                    let tx = ton_block::Transaction::construct_from_cell(cell)?;
-                    let in_msg_hash = match &tx.in_msg {
+                    let hash = cell.repr_hash();
+                    let data = ton_block::Transaction::construct_from_cell(cell)?;
+                    let in_msg_hash = match &data.in_msg {
                         Some(in_msg) => in_msg.hash(),
                         None => return Ok(true),
                     };
@@ -260,7 +257,7 @@ impl Subscription {
                     counter.fetch_sub(1, Ordering::Release);
 
                     if let Some(channel) = pending_message.tx.take() {
-                        channel.send(Some(tx)).ok();
+                        channel.send(Some(TransactionWithHash { hash, data })).ok();
                     }
 
                     Ok(true)
@@ -340,7 +337,7 @@ impl Edge {
 
 struct PendingMessage {
     expire_at: u32,
-    tx: Option<oneshot::Sender<Option<ton_block::Transaction>>>,
+    tx: Option<oneshot::Sender<Option<TransactionWithHash>>>,
 }
 
 impl Drop for PendingMessage {
