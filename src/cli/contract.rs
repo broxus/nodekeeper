@@ -5,9 +5,8 @@ use argh::FromArgs;
 use nekoton_abi::FunctionExt;
 
 use super::CliContext;
-use crate::global_config::GlobalConfig;
 use crate::node_tcp_rpc::{NodeStats, NodeTcpRpc};
-use crate::node_udp_rpc::NodeUdpRpc;
+use crate::node_udp_rpc::{GlobalConfig, NodeUdpRpc};
 use crate::subscription::Subscription;
 use crate::util::*;
 
@@ -195,11 +194,15 @@ impl CmdSend {
             NodeStats::NotReady => anyhow::bail!("node is not ready"),
         };
 
-        let node_udp_rpc = NodeUdpRpc::new(
-            global_config,
-            everscale_network::adnl::NodeIdShort::new(stats.overlay_adnl_id),
-        )
-        .await?;
+        let zerostate_file_hash = global_config.zero_state.file_hash;
+
+        let node_udp_rpc = NodeUdpRpc::new_uninit(30000).await?;
+        let peer = node_udp_rpc
+            .resolve_peer(global_config, stats.overlay_adnl_id.into())
+            .await?;
+        let node_udp_rpc = node_udp_rpc
+            .initialize(peer, zerostate_file_hash.as_slice())
+            .await?;
 
         let subscription = Subscription::new(node_tcp_rpc, node_udp_rpc);
         let TransactionWithHash {

@@ -3,16 +3,23 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use everscale_crypto::ed25519;
 use everscale_network::utils::PackedSocketAddr;
 use everscale_network::{adnl, dht, overlay, rldp, NetworkBuilder};
 use parking_lot::Mutex;
 use rand::Rng;
 use tl_proto::{TlRead, TlWrite};
 
-use crate::global_config::GlobalConfig;
+pub use self::global_config::GlobalConfig;
 use crate::util::BlockStuff;
 
+mod global_config;
 mod proto;
+
+pub struct RemotePeer {
+    pub ip: SocketAddrV4,
+    pub pubkey: ed25519::PublicKey,
+}
 
 #[derive(Clone)]
 pub struct NodeUdpRpc {
@@ -20,13 +27,13 @@ pub struct NodeUdpRpc {
 }
 
 impl NodeUdpRpc {
-    pub async fn new(global_config: GlobalConfig, peer_id: adnl::NodeIdShort) -> Result<Self> {
+    pub async fn new_uninit(port: u16) -> Result<UninitNodeUdpRpc> {
         let ip_addr = public_ip::addr_v4()
             .await
             .context("failed to resolve public ip")?;
 
         let keystore = adnl::Keystore::builder()
-            .with_tagged_key(rand::thread_rng().gen(), 0)?
+            .with_tagged_key(rand::thread_rng().gen(), KEY_TAG)?
             .build();
 
         let rldp_options = rldp::NodeOptions {
@@ -35,7 +42,7 @@ impl NodeUdpRpc {
         };
 
         let (adnl, dht, rldp) = NetworkBuilder::with_adnl(
-            SocketAddrV4::new(ip_addr, 30001),
+            SocketAddrV4::new(ip_addr, port),
             keystore,
             Default::default(),
         )
@@ -43,35 +50,38 @@ impl NodeUdpRpc {
         .with_rldp(rldp_options)
         .build()?;
 
-        for peer in global_config.dht_nodes {
-            dht.add_dht_peer(peer.clone())?;
-        }
-
         adnl.start()?;
 
-        let dht_node_count = dht.find_more_dht_nodes().await?;
-        tracing::info!("total DHT nodes: {dht_node_count}");
+        Ok(UninitNodeUdpRpc { adnl, dht, rldp })
+    }
 
+    pub async fn from_parts(
+        adnl: Arc<adnl::Node>,
+        rldp: Arc<rldp::Node>,
+        peer: RemotePeer,
+        zerostate_file_hash: &[u8; 32],
+    ) -> Result<Self> {
         let overlay_id_full =
-            overlay::IdFull::for_shard_overlay(-1, global_config.zero_state.file_hash.as_slice());
+            overlay::IdFull::for_shard_overlay(ton_block::MASTERCHAIN_ID, zerostate_file_hash);
         let overlay_id = overlay_id_full.compute_short_id();
 
         let query_prefix = tl_proto::serialize(everscale_network::proto::rpc::OverlayQuery {
             overlay: overlay_id.as_slice(),
         });
 
-        let (peer_ip_address, peer_full_id) = resolve_ip(&dht, &peer_id).await?;
+        let peer_id_full = adnl::NodeIdFull::new(peer.pubkey);
+        let peer_id = peer_id_full.compute_short_id();
 
-        let local_id = *adnl.key_by_tag(0)?.id();
+        let local_id = *adnl.key_by_tag(KEY_TAG)?.id();
         adnl.add_peer(
             adnl::NewPeerContext::Dht,
             &local_id,
             &peer_id,
-            peer_ip_address,
-            peer_full_id,
+            peer.ip.into(),
+            peer_id_full,
         )?;
 
-        Ok(Self {
+        Ok(NodeUdpRpc {
             inner: Arc::new(NodeInner {
                 local_id,
                 peer_id,
@@ -144,6 +154,62 @@ impl NodeUdpRpc {
                     tracing::debug!("block receiver timeout");
                     timeouts.sleep_and_update().await;
                     attempt += 1;
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct UninitNodeUdpRpc {
+    adnl: Arc<adnl::Node>,
+    dht: Arc<dht::Node>,
+    rldp: Arc<rldp::Node>,
+}
+
+impl UninitNodeUdpRpc {
+    pub async fn resolve_peer(
+        &self,
+        global_config: GlobalConfig,
+        peer_id: adnl::NodeIdShort,
+    ) -> Result<RemotePeer> {
+        // Add static nodes
+        for peer in global_config.dht_nodes {
+            self.dht.add_dht_peer(peer.clone())?;
+        }
+
+        // Find other nodes
+        let dht_node_count = self.dht.find_more_dht_nodes().await?;
+        tracing::debug!("total DHT nodes: {dht_node_count}");
+
+        let (peer_ip_address, peer_full_id) = self.resolve_ip(&peer_id).await?;
+
+        Ok(RemotePeer {
+            ip: peer_ip_address.into(),
+            pubkey: *peer_full_id.public_key(),
+        })
+    }
+
+    pub async fn initialize(
+        self,
+        peer: RemotePeer,
+        zerostate_file_hash: &[u8; 32],
+    ) -> Result<NodeUdpRpc> {
+        NodeUdpRpc::from_parts(self.adnl, self.rldp, peer, &zerostate_file_hash).await
+    }
+
+    async fn resolve_ip(
+        &self,
+        peer_id: &adnl::NodeIdShort,
+    ) -> Result<(PackedSocketAddr, adnl::NodeIdFull)> {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            match self.dht.find_address(peer_id).await {
+                Ok(res) => break Ok(res),
+                Err(e) if attempt > 2 => break Err(e),
+                Err(e) => {
+                    tracing::warn!("failed to resolve peer IP: {e}");
                 }
             }
         }
@@ -243,19 +309,4 @@ impl DownloaderTimeouts {
     }
 }
 
-async fn resolve_ip(
-    dht: &Arc<dht::Node>,
-    peer_id: &adnl::NodeIdShort,
-) -> Result<(PackedSocketAddr, adnl::NodeIdFull)> {
-    let mut attempt = 0;
-    loop {
-        attempt += 1;
-        match dht.find_address(peer_id).await {
-            Ok(res) => break Ok(res),
-            Err(e) if attempt > 2 => break Err(e),
-            Err(e) => {
-                tracing::warn!("failed to resolve peer IP: {e}");
-            }
-        }
-    }
-}
+const KEY_TAG: usize = 0;

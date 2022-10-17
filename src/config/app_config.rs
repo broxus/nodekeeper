@@ -30,12 +30,14 @@ pub struct AppConfig {
     pub query_timeout: Duration,
 
     /// Server ADNL address
+    #[serde(default)]
     pub server_adnl_address: Option<SocketAddrV4>,
 
     /// Server ADNL overlay pubkey
-    #[serde(with = "serde_optional_public_key")]
+    #[serde(default, with = "serde_optional_public_key")]
     pub server_adnl_pubkey: Option<ed25519::PublicKey>,
 
     /// Zerostate file hash
+    #[serde(default)]
     pub zerostate_file_hash: Option<[u8; 32]>,
 }

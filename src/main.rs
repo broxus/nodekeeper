@@ -4,7 +4,6 @@ mod cli;
 mod config;
 mod crypto;
 mod exporter;
-mod global_config;
 mod node_tcp_rpc;
 mod node_udp_rpc;
 mod subscription;
