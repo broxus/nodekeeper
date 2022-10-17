@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use super::proto;
 use crate::util::serde_block_id;
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "snake_case", tag = "state")]
 pub enum NodeStats {

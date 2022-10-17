@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 aes = "0.8"
+atty = "0.2"
 anyhow = "1.0.65"
 arc-swap = "1.5"
 argh = "0.1.9"
@@ -20,7 +21,9 @@ everscale-network = { version = "0.3", default-features = false, features = ["rl
 futures-util = "0.3"
 generic-array = "0.14"
 hex = "0.4"
+hmac = "0.11.0"
 parking_lot = "0.12.1"
+pbkdf2 = "0.9.0"
 pomfrit = "0.1.8"
 public-ip = "0.2"
 rand = "0.8.5"
@@ -44,6 +47,8 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 
 ed25519-dalek = { git = "https://github.com/broxus/ed25519-dalek.git" }
+tiny-bip39 = { git = "https://github.com/broxus/tiny-bip39.git", default-features = false }
+tiny-hderive = { git = "https://github.com/broxus/tiny-hderive.git" }
 
 ton_abi = { git = "https://github.com/broxus/ton-labs-abi.git" }
 ton_block = { git = "https://github.com/broxus/ton-labs-block.git" }

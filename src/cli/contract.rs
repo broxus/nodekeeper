@@ -29,7 +29,7 @@ impl Cmd {
             SubCmd::Send(cmd) => cmd.run(node_rpc).await?,
         };
 
-        println!("{}", serde_json::to_string_pretty(&response)?);
+        print_output(response);
         Ok(())
     }
 }
@@ -266,7 +266,7 @@ fn parse_message<'a, 'b: 'a>(
             ton_abi::TokenValue::decode_params(&method.outputs, body, &method.abi_version, false)?;
         Ok(Some(ParsedData::Output(output)))
     } else {
-        let mut event = match abi.events.values().find(|event| event.id == function_id) {
+        let event = match abi.events.values().find(|event| event.id == function_id) {
             Some(event) => event,
             None => return Ok(None),
         };

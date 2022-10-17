@@ -114,7 +114,7 @@ impl Cmd {
             }
         };
 
-        println!("{}", serde_json::to_string_pretty(&response)?);
+        print_output(response);
         Ok(())
     }
 }

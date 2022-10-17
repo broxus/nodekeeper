@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -12,6 +12,15 @@ use serde::Deserialize;
 use ton_block::Deserializable;
 
 pub type FxDashMap<K, V> = DashMap<K, V, BuildHasherDefault<rustc_hash::FxHasher>>;
+
+pub fn print_output<T: std::fmt::Display>(arg: T) {
+    if atty::is(atty::Stream::Stdout) {
+        writeln!(std::io::stdout(), "{arg:#}")
+    } else {
+        write!(std::io::stdout(), "{arg}")
+    }
+    .unwrap()
+}
 
 pub fn parse_contract_abi<P>(path: P) -> Result<ton_abi::Contract>
 where

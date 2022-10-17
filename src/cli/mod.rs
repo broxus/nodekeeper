@@ -8,6 +8,7 @@ use crate::config::Config;
 pub mod contract;
 pub mod exporter;
 pub mod node;
+pub mod seed;
 
 /// All-in-one node management tool with support for the upcoming stEVER
 #[derive(FromArgs)]
@@ -30,6 +31,7 @@ impl App {
             Command::Contract(cmd) => cmd.run(ctx).await,
             Command::Exporter(cmd) => cmd.run(ctx).await,
             Command::Node(cmd) => cmd.run(ctx).await,
+            Command::Seed(cmd) => cmd.run(),
         }
     }
 }
@@ -40,6 +42,7 @@ enum Command {
     Contract(contract::Cmd),
     Exporter(exporter::Cmd),
     Node(node::Cmd),
+    Seed(seed::Cmd),
 }
 
 pub struct CliContext {
