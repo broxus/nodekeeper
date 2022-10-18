@@ -195,7 +195,7 @@ impl UninitNodeUdpRpc {
         peer: RemotePeer,
         zerostate_file_hash: &[u8; 32],
     ) -> Result<NodeUdpRpc> {
-        NodeUdpRpc::from_parts(self.adnl, self.rldp, peer, &zerostate_file_hash).await
+        NodeUdpRpc::from_parts(self.adnl, self.rldp, peer, zerostate_file_hash).await
     }
 
     async fn resolve_ip(

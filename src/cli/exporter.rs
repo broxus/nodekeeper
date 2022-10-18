@@ -14,11 +14,11 @@ use crate::node_tcp_rpc::NodeTcpRpc;
 #[argh(subcommand, name = "exporter")]
 pub struct Cmd {
     /// socket addr to host the exporter
-    #[argh(option)]
+    #[argh(option, short = 'a')]
     addr: Option<SocketAddr>,
 
     /// path to the file where the metrics are written
-    #[argh(option)]
+    #[argh(option, short = 'f')]
     file: Option<PathBuf>,
 
     /// whether to run exporter once

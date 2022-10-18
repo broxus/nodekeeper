@@ -3,8 +3,10 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use argh::FromArgs;
 use nekoton_abi::FunctionExt;
+use ton_block::{Deserializable, Serializable};
 
 use super::CliContext;
+use crate::config::AppConfig;
 use crate::node_tcp_rpc::{NodeStats, NodeTcpRpc};
 use crate::node_udp_rpc::{GlobalConfig, NodeUdpRpc};
 use crate::subscription::Subscription;
@@ -20,12 +22,10 @@ pub struct Cmd {
 
 impl Cmd {
     pub async fn run(self, mut ctx: CliContext) -> Result<()> {
-        let config = ctx.load_config()?;
-        let node_rpc = NodeTcpRpc::new(&config).await?;
-
         let response = match self.subcommand {
-            SubCmd::Call(cmd) => cmd.run(node_rpc).await?,
-            SubCmd::Send(cmd) => cmd.run(node_rpc).await?,
+            SubCmd::StateInit(cmd) => cmd.run()?,
+            SubCmd::Call(cmd) => cmd.run(ctx.load_config()?).await?,
+            SubCmd::Send(cmd) => cmd.run(ctx.load_config()?).await?,
         };
 
         print_output(response);
@@ -54,8 +54,83 @@ async fn get_account_stuff(
 #[derive(FromArgs)]
 #[argh(subcommand)]
 enum SubCmd {
+    StateInit(CmdStateInit),
     Call(CmdCall),
     Send(CmdSend),
+}
+
+#[derive(FromArgs)]
+/// Computes contract address
+#[argh(subcommand, name = "stateinit")]
+struct CmdStateInit {
+    /// base64 encoded TVC or empty for input from stdin
+    #[argh(positional)]
+    tvc: Option<String>,
+
+    /// workchain
+    #[argh(option, short = 'w', default = "0")]
+    workchain: i8,
+
+    /// static variables
+    #[argh(option, short = 'd', long = "data")]
+    data: Option<serde_json::Value>,
+
+    /// path to the JSON ABI file
+    #[argh(option, short = 'a')]
+    abi: Option<PathBuf>,
+
+    /// explicit contract pubkey
+    #[argh(option, short = 'p')]
+    pubkey: Option<String>,
+}
+
+impl CmdStateInit {
+    fn run(self) -> Result<serde_json::Value> {
+        let mut state_init = {
+            let tvc = parse_optional_input(self.tvc, false)?;
+            ton_block::StateInit::construct_from_bytes(&tvc).context("invalid TVC")?
+        };
+
+        if let Some(abi) = self.abi {
+            let abi = parse_contract_abi(abi)?;
+
+            if let Some(pubkey) = parse_optional_pubkey(self.pubkey)? {
+                let data = state_init.data().context("TVC doesn't contain data")?;
+                let data = ton_abi::Contract::insert_pubkey(data.into(), pubkey.as_bytes())
+                    .context("failed to insert pubkey")?;
+                state_init.set_data(data.into_cell());
+            }
+
+            if let Some(tokens) = self.data {
+                let params = abi
+                    .data
+                    .values()
+                    .map(|item| item.value.clone())
+                    .collect::<Vec<_>>();
+                let static_params = nekoton_abi::parse_abi_tokens(&params, tokens)?;
+
+                let data = state_init.data().context("TVC doesn't contain data")?;
+                let data = abi
+                    .update_data(data.into(), &static_params)
+                    .context("failed to update TVC static data")?;
+                state_init.set_data(data.into_cell());
+            }
+        } else {
+            anyhow::ensure!(
+                self.data.is_none() && self.pubkey.is_none(),
+                "`abi` param is required to alter the provided TVC"
+            );
+        }
+
+        let tvc = state_init.serialize()?;
+        let address = format!("{}:{:x}", self.workchain, tvc.repr_hash());
+        let tvc = base64::encode(ton_types::serialize_toc(&tvc)?);
+
+        Ok(serde_json::json!({
+            "address": address,
+            "tvc": tvc,
+        }))
+    }
 }
 
 #[derive(FromArgs)]
@@ -71,20 +146,22 @@ struct CmdCall {
     args: serde_json::Value,
 
     /// path to the JSON ABI file
-    #[argh(option)]
+    #[argh(option, short = 'a')]
     abi: PathBuf,
 
     /// contract address
-    #[argh(option, long = "addr")]
+    #[argh(option, short = 'd', long = "addr")]
     address: String,
 
     /// execute method as responsible. (NOTE: requires first argument of type `uint32`)
-    #[argh(switch)]
+    #[argh(switch, short = 'r')]
     responsible: bool,
 }
 
 impl CmdCall {
-    async fn run(self, node_rpc: NodeTcpRpc) -> Result<serde_json::Value> {
+    async fn run(self, config: AppConfig) -> Result<serde_json::Value> {
+        let node_rpc = NodeTcpRpc::new(&config).await?;
+
         let clock = nekoton_utils::SimpleClock;
 
         let address = parse_address(&self.address)?;
@@ -126,32 +203,34 @@ struct CmdSend {
     args: serde_json::Value,
 
     /// path to the JSON ABI file
-    #[argh(option)]
+    #[argh(option, short = 'a')]
     abi: PathBuf,
 
     /// contract address
-    #[argh(option, long = "addr")]
+    #[argh(option, short = 'd', long = "addr")]
     address: String,
 
     /// message expiration timeout
-    #[argh(option, long = "timeout", default = "60")]
+    #[argh(option, short = 't', default = "60")]
     timeout: u32,
 
     /// seed phrase or path to the keys
-    #[argh(option)]
+    #[argh(option, short = 's')]
     sign: Option<PathBuf>,
 
     /// base64 encoded state init
-    #[argh(option)]
+    #[argh(option, short = 'i')]
     state_init: Option<String>,
 
     /// path to the global config
-    #[argh(option)]
+    #[argh(option, short = 'g')]
     global_config: PathBuf,
 }
 
 impl CmdSend {
-    async fn run(self, node_tcp_rpc: NodeTcpRpc) -> Result<serde_json::Value> {
+    async fn run(self, config: AppConfig) -> Result<serde_json::Value> {
+        let node_tcp_rpc = NodeTcpRpc::new(&config).await?;
+
         let address = parse_address(&self.address)?;
 
         let abi = parse_contract_abi(&self.abi)?;

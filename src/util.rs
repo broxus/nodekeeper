@@ -37,6 +37,16 @@ pub fn parse_address(address: &str) -> Result<ton_block::MsgAddressInt> {
     ton_block::MsgAddressInt::from_str(address).map_err(From::from)
 }
 
+pub fn parse_optional_pubkey(pubkey: Option<String>) -> Result<Option<ed25519_dalek::PublicKey>> {
+    match pubkey {
+        Some(pubkey) => {
+            let pubkey = parse_hex_or_base64(&pubkey)?;
+            Ok(Some(ed25519_dalek::PublicKey::from_bytes(&pubkey)?))
+        }
+        None => Ok(None),
+    }
+}
+
 pub fn parse_optional_input(data: Option<String>, raw: bool) -> Result<Vec<u8>> {
     match data {
         Some(data) if raw => Ok(data.into()),
