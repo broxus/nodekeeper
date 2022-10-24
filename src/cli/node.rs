@@ -16,9 +16,9 @@ pub struct Cmd {
 }
 
 impl Cmd {
-    pub async fn run(self, mut ctx: CliContext) -> Result<()> {
+    pub async fn run(self, ctx: CliContext) -> Result<()> {
         let config = ctx.load_config()?;
-        let rpc_node = NodeTcpRpc::new(&config).await?;
+        let rpc_node = NodeTcpRpc::new(config.control()?).await?;
 
         let response = match self.subcommand {
             SubCmd::GenKey(_) => {

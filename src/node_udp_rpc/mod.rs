@@ -10,10 +10,9 @@ use parking_lot::Mutex;
 use rand::Rng;
 use tl_proto::{TlRead, TlWrite};
 
-pub use self::global_config::GlobalConfig;
+use crate::config::GlobalConfig;
 use crate::util::BlockStuff;
 
-mod global_config;
 mod proto;
 
 pub struct RemotePeer {
@@ -202,12 +201,14 @@ impl UninitNodeUdpRpc {
         &self,
         peer_id: &adnl::NodeIdShort,
     ) -> Result<(PackedSocketAddr, adnl::NodeIdFull)> {
+        const RETRY_COUNT: usize = 10;
+
         let mut attempt = 0;
         loop {
             attempt += 1;
             match self.dht.find_address(peer_id).await {
                 Ok(res) => break Ok(res),
-                Err(e) if attempt > 2 => break Err(e),
+                Err(e) if attempt > RETRY_COUNT => break Err(e),
                 Err(e) => {
                     tracing::warn!("failed to resolve peer IP: {e}");
                 }

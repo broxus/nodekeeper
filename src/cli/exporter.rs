@@ -31,9 +31,9 @@ pub struct Cmd {
 }
 
 impl Cmd {
-    pub async fn run(self, mut ctx: CliContext) -> Result<()> {
+    pub async fn run(self, ctx: CliContext) -> Result<()> {
         let config = ctx.load_config()?;
-        let node_rpc = NodeTcpRpc::new(&config).await?;
+        let node_rpc = NodeTcpRpc::new(config.control()?).await?;
 
         match (self.once, self.file, self.addr) {
             (_, None, None) => Err(ExporterError::NoExporters.into()),

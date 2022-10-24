@@ -1,5 +1,5 @@
 use std::convert::{TryFrom, TryInto};
-use std::path::Path;
+use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
 use broxus_util::serde_base64_array;
@@ -13,10 +13,15 @@ pub struct GlobalConfig {
 }
 
 impl GlobalConfig {
-    pub fn load<P>(path: P) -> Result<Self>
-    where
-        P: AsRef<Path>,
-    {
+    pub fn load(path: &str) -> Result<Self> {
+        if !PathBuf::from(path).exists() {
+            match path {
+                "mainnet" => return Ok(serde_json::from_str(include_str!("mainnet.json"))?),
+                "testnet" => return Ok(serde_json::from_str(include_str!("testnet.json"))?),
+                _ => {}
+            }
+        }
+
         let file = std::fs::File::open(path)?;
         let reader = std::io::BufReader::new(file);
         let config = serde_json::from_reader(reader)?;

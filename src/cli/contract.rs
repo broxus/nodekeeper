@@ -6,9 +6,9 @@ use nekoton_abi::FunctionExt;
 use ton_block::{Deserializable, Serializable};
 
 use super::CliContext;
-use crate::config::AppConfig;
+use crate::config::{AppConfig, GlobalConfig};
 use crate::node_tcp_rpc::{NodeStats, NodeTcpRpc};
-use crate::node_udp_rpc::{GlobalConfig, NodeUdpRpc};
+use crate::node_udp_rpc::NodeUdpRpc;
 use crate::subscription::Subscription;
 use crate::util::*;
 
@@ -21,7 +21,7 @@ pub struct Cmd {
 }
 
 impl Cmd {
-    pub async fn run(self, mut ctx: CliContext) -> Result<()> {
+    pub async fn run(self, ctx: CliContext) -> Result<()> {
         let response = match self.subcommand {
             SubCmd::StateInit(cmd) => cmd.run()?,
             SubCmd::Call(cmd) => cmd.run(ctx.load_config()?).await?,
@@ -160,7 +160,7 @@ struct CmdCall {
 
 impl CmdCall {
     async fn run(self, config: AppConfig) -> Result<serde_json::Value> {
-        let node_rpc = NodeTcpRpc::new(&config).await?;
+        let node_rpc = NodeTcpRpc::new(config.control()?).await?;
 
         let clock = nekoton_utils::SimpleClock;
 
@@ -224,12 +224,12 @@ struct CmdSend {
 
     /// path to the global config
     #[argh(option, short = 'g')]
-    global_config: PathBuf,
+    global_config: String,
 }
 
 impl CmdSend {
     async fn run(self, config: AppConfig) -> Result<serde_json::Value> {
-        let node_tcp_rpc = NodeTcpRpc::new(&config).await?;
+        let node_tcp_rpc = NodeTcpRpc::new(config.control()?).await?;
 
         let address = parse_address(&self.address)?;
 
@@ -266,7 +266,8 @@ impl CmdSend {
             message.set_state_init(state_init);
         }
 
-        let global_config = GlobalConfig::load(self.global_config)?;
+        let global_config =
+            GlobalConfig::load(&self.global_config).context("failed to load global config")?;
 
         let stats = match node_tcp_rpc.get_stats().await? {
             NodeStats::Running(stats) => stats,

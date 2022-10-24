@@ -8,7 +8,7 @@ use ton_block::Deserializable;
 use self::stats::StatsError;
 pub use self::stats::{NodeStats, ValidatorSetEntry};
 use self::tcp_adnl::{TcpAdnl, TcpAdnlConfig, TcpAdnlError};
-use crate::config::AppConfig;
+use crate::config::AppConfigControl;
 
 mod proto;
 mod stats;
@@ -22,9 +22,9 @@ pub struct NodeTcpRpc {
 }
 
 impl NodeTcpRpc {
-    pub async fn new(config: &AppConfig) -> Result<Self, NodeRpcError> {
+    pub async fn new(config: &AppConfigControl) -> Result<Self, NodeRpcError> {
         let tcp_adnl = TcpAdnl::connect(TcpAdnlConfig {
-            server_address: config.server_address,
+            server_address: config.server_address.into(),
             server_pubkey: config.server_pubkey,
             client_secret: config.client_secret,
             connection_timeout: config.connection_timeout,
@@ -35,7 +35,7 @@ impl NodeTcpRpc {
         let query_timeout = config.query_timeout;
 
         Ok(Self {
-            server_address: config.server_address,
+            server_address: config.server_address.into(),
             tcp_adnl,
             query_timeout,
         })
