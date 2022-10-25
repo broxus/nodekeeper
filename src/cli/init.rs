@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 
@@ -7,7 +8,9 @@ use console::style;
 use dialoguer::theme::Theme;
 use dialoguer::{Confirm, Input, Select};
 
-use crate::config::{AppConfig, AppConfigControl, NodeConfig, NodeConfigControlServer};
+use crate::config::{
+    AppConfig, AppConfigAdnl, AppConfigControl, NodeConfig, NodeConfigAdnl, NodeConfigControlServer,
+};
 
 use super::CliContext;
 
@@ -40,6 +43,15 @@ impl Cmd {
             &mut node_config,
         )?;
 
+        setup_adnl(
+            theme,
+            &ctx.config_path,
+            &mut app_config,
+            &self.node_config,
+            &mut node_config,
+        )
+        .await?;
+
         Ok(())
     }
 }
@@ -71,6 +83,79 @@ fn load_app_config(
     config.store(path)?;
 
     Ok(Some(config))
+}
+
+async fn setup_adnl<P: AsRef<Path>>(
+    theme: &dyn Theme,
+    app_config_path: P,
+    app_config: &mut AppConfig,
+    node_config_path: P,
+    node_config: &mut NodeConfig,
+) -> Result<bool> {
+    const DHT_TAG: usize = 1;
+    const OVERLAY_TAG: usize = 2;
+
+    let adnl_port = node_config
+        .get_suggested_adnl_port()
+        .unwrap_or(DEFAULT_ADNL_PORT);
+
+    match (&mut app_config.adnl, node_config.get_adnl_node()?) {
+        (Some(adnl_client), Some(adnl_node)) => {
+            let server_pubkey = adnl_node.overlay_pubkey()?;
+            if adnl_client.server_address != adnl_node.ip_address
+                || adnl_client.server_pubkey != server_pubkey
+            {
+                if !confirm(theme, false, "ADNL node configuration mismatch. Update?")? {
+                    return Ok(false);
+                }
+
+                adnl_client.server_address = adnl_node.ip_address;
+                adnl_client.server_pubkey = server_pubkey;
+                // TODO: update zerostate file hash
+            }
+        }
+        (None, Some(adnl_node)) => {
+            app_config.adnl = Some(AppConfigAdnl {
+                server_address: adnl_node.ip_address,
+                server_pubkey: adnl_node.overlay_pubkey()?,
+                zerostate_file_hash: Default::default(),
+            });
+
+            app_config.store(app_config_path)?;
+        }
+        (_, None) => {
+            let addr: Ipv4Addr = {
+                let public_ip = public_ip::addr_v4().await;
+                let mut input = Input::with_theme(theme);
+                if let Some(public_ip) = public_ip {
+                    input.with_initial_text(public_ip.to_string());
+                }
+                input.with_prompt("Enter public ip").interact_text()?
+            };
+
+            let adnl_port = Input::with_theme(theme)
+                .with_prompt("Specify ADNL port")
+                .with_initial_text(adnl_port.to_string())
+                .interact()?;
+
+            let adnl_node = NodeConfigAdnl::from_addr_and_keys(
+                SocketAddrV4::new(addr, adnl_port),
+                NodeConfigAdnl::generate_keys(),
+            );
+            node_config.set_adnl_node(&adnl_node)?;
+
+            app_config.adnl = Some(AppConfigAdnl {
+                server_address: adnl_node.ip_address,
+                server_pubkey: adnl_node.overlay_pubkey()?,
+                zerostate_file_hash: Default::default(),
+            });
+
+            app_config.store(app_config_path)?;
+            node_config.store(node_config_path)?;
+        }
+    }
+
+    Ok(true)
 }
 
 fn setup_control_server<P: AsRef<Path>>(
@@ -244,7 +329,7 @@ fn setup_control_server<P: AsRef<Path>>(
 
             let control_port = Input::with_theme(theme)
                 .with_prompt("Specify control port")
-                .default(control_port)
+                .with_initial_text(control_port.to_string())
                 .interact()?;
 
             let addr = SocketAddrV4::new(listen_addr, control_port);
@@ -257,15 +342,14 @@ fn setup_control_server<P: AsRef<Path>>(
                 ed25519::PublicKey::from(&server_key),
                 client_key,
             ));
-            app_config.store(app_config_path)?;
 
-            let control_server = NodeConfigControlServer::from_addr_and_keys(
+            node_config.set_control_server(&NodeConfigControlServer::from_addr_and_keys(
                 addr,
                 server_key,
                 ed25519::PublicKey::from(&client_key),
-            );
+            ))?;
 
-            node_config.set_control_server(&control_server)?;
+            app_config.store(app_config_path)?;
             node_config.store(node_config_path)?;
         }
     }
@@ -298,3 +382,4 @@ fn step(i: usize, total: usize) -> impl std::fmt::Display {
 }
 
 const DEFAULT_CONTROL_PORT: u16 = 5031;
+const DEFAULT_ADNL_PORT: u16 = 30100;

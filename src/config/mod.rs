@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use home::home_dir;
 use once_cell::race::OnceBox;
 
-pub use self::app_config::{AppConfig, AppConfigControl};
+pub use self::app_config::{AppConfig, AppConfigAdnl, AppConfigControl};
 pub use self::global_config::GlobalConfig;
 pub use self::node_config::{NodeConfig, NodeConfigAdnl, NodeConfigControlServer};
 
@@ -13,7 +13,7 @@ mod node_config;
 
 pub fn default_config_path() -> PathBuf {
     // Search local config first
-    for local in ["./config.json", "./config.yaml", "./config.toml"] {
+    for local in ["./config.json", "./config.toml"] {
         let path = PathBuf::from(local);
         if path.exists() {
             return path;
@@ -21,7 +21,7 @@ pub fn default_config_path() -> PathBuf {
     }
 
     // Use default folder
-    default_root_dir().join("config.yaml")
+    default_root_dir().join("config.toml")
 }
 
 pub fn default_root_dir() -> &'static PathBuf {

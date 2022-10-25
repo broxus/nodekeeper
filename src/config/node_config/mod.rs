@@ -102,13 +102,6 @@ impl NodeConfigControlServer {
 
 pub type Clients = Option<Vec<ed25519::PublicKey>>;
 
-// #[derive(Deserialize, Serialize)]
-// #[serde(rename_all = "lowercase")]
-// pub enum NodeConfigControlClients {
-//     Any,
-//     List(#[serde(with = "serde_control_clients")] Vec<ed25519::PublicKey>),
-// }
-
 #[derive(Serialize, Deserialize)]
 pub struct NodeConfigControlServerTimeouts {
     pub read: Duration,
@@ -129,6 +122,9 @@ pub struct NodeConfigAdnl {
 }
 
 impl NodeConfigAdnl {
+    pub const DHT_TAG: usize = 1;
+    pub const OVERLAY_TAG: usize = 2;
+
     pub fn from_addr_and_keys(addr: SocketAddrV4, keys: Keys) -> Self {
         Self {
             ip_address: addr,
@@ -142,9 +138,17 @@ impl NodeConfigAdnl {
     pub fn generate_keys() -> Keys {
         let rng = &mut rand::thread_rng();
         HashMap::from([
-            (1, ed25519::SecretKey::generate(rng)),
-            (2, ed25519::SecretKey::generate(rng)),
+            (Self::DHT_TAG, ed25519::SecretKey::generate(rng)),
+            (Self::OVERLAY_TAG, ed25519::SecretKey::generate(rng)),
         ])
+    }
+
+    pub fn overlay_pubkey(&self) -> Result<ed25519::PublicKey> {
+        self.keys
+            .get(&Self::OVERLAY_TAG)
+            .map(ed25519::PublicKey::from)
+            .context("overlay key not found")
+            .context("invalid ADNL node config")
     }
 }
 

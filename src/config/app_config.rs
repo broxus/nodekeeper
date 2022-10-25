@@ -3,7 +3,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use broxus_util::{const_duration_ms, serde_duration_ms};
+use broxus_util::{const_duration_ms, serde_duration_ms, serde_hex_array};
 use everscale_crypto::ed25519;
 use serde::{Deserialize, Serialize};
 
@@ -15,11 +15,16 @@ use crate::util::{serde_public_key, serde_secret_key};
 pub struct AppConfig {
     /// Control config
     pub control: Option<AppConfigControl>,
+    /// ADNL config
+    pub adnl: Option<AppConfigAdnl>,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
-        Self { control: None }
+        Self {
+            control: None,
+            adnl: None,
+        }
     }
 }
 
@@ -39,8 +44,8 @@ impl AppConfig {
             Some(ext) if ext == "json" => {
                 serde_json::to_string_pretty(self).context("failed to serialize config")?
             }
-            Some(ext) if ext == "yaml" => {
-                serde_yaml::to_string(self).context("failed to serialize config")?
+            Some(ext) if ext == "toml" => {
+                toml::to_string_pretty(self).context("failed to serialize config")?
             }
             _ => anyhow::bail!("unknown config format"),
         };
@@ -90,16 +95,16 @@ impl AppConfigControl {
     }
 }
 
-/*
+#[derive(Clone, Serialize, Deserialize)]
+pub struct AppConfigAdnl {
     /// Server ADNL address
-    #[serde(default)]
-    pub server_adnl_address: Option<SocketAddrV4>,
+    pub server_address: SocketAddrV4,
 
-    /// Server ADNL overlay pubkey
-    #[serde(default, with = "serde_optional_public_key")]
-    pub server_adnl_pubkey: Option<ed25519::PublicKey>,
+    /// Server overlay pubkey
+    #[serde(with = "serde_public_key")]
+    pub server_pubkey: ed25519::PublicKey,
 
-    /// Zerostate file hash
-    #[serde(default)]
-    pub zerostate_file_hash: Option<[u8; 32]>,
-*/
+    /// Zerostate file hash from the global config
+    #[serde(with = "serde_hex_array")]
+    pub zerostate_file_hash: [u8; 32],
+}
