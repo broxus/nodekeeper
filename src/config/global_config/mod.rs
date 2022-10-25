@@ -1,7 +1,7 @@
 use std::convert::{TryFrom, TryInto};
-use std::path::PathBuf;
+use std::path::Path;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use broxus_util::serde_base64_array;
 use everscale_network::proto;
 use serde::{Deserialize, Deserializer};
@@ -13,18 +13,13 @@ pub struct GlobalConfig {
 }
 
 impl GlobalConfig {
-    pub fn load(path: &str) -> Result<Self> {
-        if !PathBuf::from(path).exists() {
-            match path {
-                "mainnet" => return Ok(serde_json::from_str(include_str!("mainnet.json"))?),
-                "testnet" => return Ok(serde_json::from_str(include_str!("testnet.json"))?),
-                _ => {}
-            }
-        }
+    pub const MAINNET: &str = include_str!("mainnet.json");
+    pub const TESTNET: &str = include_str!("testnet.json");
 
-        let file = std::fs::File::open(path)?;
-        let reader = std::io::BufReader::new(file);
-        let config = serde_json::from_reader(reader)?;
+    pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let file = std::fs::File::open(path).context("failed to open global config")?;
+        let config = serde_json::from_reader(std::io::BufReader::new(file))
+            .context("failed to deserialize global config")?;
         Ok(config)
     }
 }

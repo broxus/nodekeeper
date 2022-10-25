@@ -31,6 +31,7 @@ pbkdf2 = "0.9.0"
 pomfrit = "0.1.8"
 public-ip = "0.2"
 rand = "0.8.5"
+reqwest = "0.11"
 rustc-hash = "1.1.0"
 serde = { version = "1", features = ["derive"] }
 serde_path_to_error = "0.1"
@@ -45,6 +46,7 @@ tokio = { version = "1", features = [
     "rt-multi-thread",
     "net",
     "io-util",
+    "process",
 ] }
 tokio-util = "0.7"
 toml = { version = "0.5", features = ["preserve_order"] }

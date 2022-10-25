@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::net::SocketAddrV4;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -17,33 +17,56 @@ impl NodeConfig {
     const CONTROL_SERVER: &str = "control_server";
     const CONTROL_SERVER_PORT: &str = "control_server_port";
     const ADNL_NODE: &str = "adnl_node";
+    const GLOBAL_CONFIG_PATH: &str = "ton_global_config_name";
+    const INTERNAL_DB_PATH: &str = "internal_db_path";
+
+    const TEMPLATE: &str = include_str!("default_config.json");
+
+    pub fn generate() -> Result<Self> {
+        serde_json::from_str(Self::TEMPLATE).context("failed to generate node config")
+    }
+
+    pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let file = std::fs::File::open(path).context("failed to open node config")?;
+        let config = serde_json::from_reader(std::io::BufReader::new(file))
+            .context("failed to deserialize node config")?;
+        Ok(config)
+    }
 
     pub fn store<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let data = serde_json::to_string_pretty(self).context("failed to serialize node config")?;
         std::fs::write(path, data).context("failed to write node config")
     }
 
+    pub fn get_global_config_path(&self) -> Result<Option<PathBuf>> {
+        self.get_field(Self::GLOBAL_CONFIG_PATH)
+    }
+
+    pub fn set_global_config_path(&mut self, path: &str) -> Result<()> {
+        self.set_field(Self::GLOBAL_CONFIG_PATH, path)
+    }
+
+    pub fn get_internal_db_path(&self) -> Result<Option<PathBuf>> {
+        self.get_field(Self::INTERNAL_DB_PATH)
+    }
+
+    pub fn set_internal_db_path(&mut self, path: &str) -> Result<()> {
+        self.set_field(Self::INTERNAL_DB_PATH, path)
+    }
+
     pub fn get_suggested_adnl_port(&self) -> Option<u16> {
-        match self.0.get(Self::IP_ADDRESS)? {
-            serde_json::Value::String(ip_address) => {
-                Some(ip_address.parse::<SocketAddrV4>().ok()?.port())
-            }
-            _ => None,
-        }
+        self.get_field::<SocketAddrV4>(Self::IP_ADDRESS)
+            .ok()
+            .flatten()
+            .map(|addr| addr.port())
     }
 
     pub fn get_suggested_control_port(&self) -> Option<u16> {
-        match self.0.get(Self::CONTROL_SERVER_PORT)? {
-            value @ serde_json::Value::Number(_) => serde_json::from_value(value.clone()).ok(),
-            _ => None,
-        }
+        self.get_field(Self::CONTROL_SERVER_PORT).ok().flatten()
     }
 
     pub fn get_adnl_node(&self) -> Result<Option<NodeConfigAdnl>> {
-        match self.0.get(Self::ADNL_NODE).cloned() {
-            Some(value) => Ok(serde_json::from_value(value)?),
-            None => Ok(None),
-        }
+        self.get_field(Self::ADNL_NODE)
     }
 
     pub fn set_adnl_node(&mut self, node: &NodeConfigAdnl) -> Result<()> {
@@ -51,19 +74,26 @@ impl NodeConfig {
     }
 
     pub fn get_control_server(&self) -> Result<Option<NodeConfigControlServer>> {
-        match self.0.get(Self::CONTROL_SERVER).cloned() {
-            Some(value) => Ok(serde_json::from_value(value)?),
-            None => Ok(None),
-        }
+        self.get_field(Self::CONTROL_SERVER)
     }
 
     pub fn set_control_server(&mut self, node: &NodeConfigControlServer) -> Result<()> {
         self.set_field(Self::CONTROL_SERVER, node)
     }
 
+    fn get_field<D>(&self, field: &str) -> Result<Option<D>>
+    where
+        for<'de> D: Deserialize<'de>,
+    {
+        match self.0.get(field).cloned() {
+            Some(value) => Ok(serde_json::from_value(value)?),
+            None => Ok(None),
+        }
+    }
+
     fn set_field<S>(&mut self, field: &str, value: &S) -> Result<()>
     where
-        S: Serialize,
+        S: Serialize + ?Sized,
     {
         let value = serde_json::to_value(value)?;
         let config = self

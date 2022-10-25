@@ -1,8 +1,9 @@
-use std::borrow::Cow;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use argh::FromArgs;
+use home::home_dir;
+use once_cell::race::OnceBox;
 
 use crate::config::*;
 
@@ -18,17 +19,17 @@ pub struct App {
     #[argh(subcommand)]
     command: Command,
 
-    /// path to the config file
-    #[argh(option, default = "default_config_path()")]
-    config: PathBuf,
+    /// path to the root directory
+    #[argh(option, default = "default_root_dir().clone()")]
+    root: PathBuf,
 }
 
 impl App {
     pub async fn run(self) -> Result<()> {
-        tracing::debug!("using config {:?}", self.config);
+        tracing::debug!("root dir {:?}", self.root);
 
         let ctx = CliContext {
-            config_path: self.config,
+            dirs: ProjectDirs::new(self.root),
         };
 
         match self.command {
@@ -52,28 +53,93 @@ enum Command {
 }
 
 pub struct CliContext {
-    config_path: PathBuf,
+    dirs: ProjectDirs,
 }
 
 impl CliContext {
     pub fn load_config(&self) -> Result<AppConfig> {
-        AppConfig::load(&self.config_path)
+        AppConfig::load(self.dirs.app_config())
     }
 
-    pub fn root_dir(&self) -> Result<PathBuf> {
-        let path = if self.config_path.is_absolute() {
-            Cow::Borrowed(self.config_path.as_path())
-        } else {
-            Cow::Owned(
-                std::env::current_dir()
-                    .context("failed to get working directory")?
-                    .join(&self.config_path),
-            )
-        };
+    pub fn dirs(&self) -> &ProjectDirs {
+        &self.dirs
+    }
+}
 
-        match path.parent() {
-            Some(path) => Ok(path.to_path_buf()),
-            None => anyhow::bail!("couldn't determine root dir"),
+pub struct ProjectDirs {
+    app_config: PathBuf,
+    node_config: PathBuf,
+    global_config: PathBuf,
+    node_configs_dir: PathBuf,
+    binaries_dir: PathBuf,
+    git_cache_dir: PathBuf,
+    root: PathBuf,
+}
+
+impl ProjectDirs {
+    fn new<P: AsRef<Path>>(root_dir: P) -> Self {
+        let root = root_dir.as_ref().to_path_buf();
+        let node_configs_dir = root.join("node");
+        let binaries_dir = root.join("bin");
+        let git_cache_dir = root.join("git");
+
+        Self {
+            app_config: root.join("config.toml"),
+            node_config: node_configs_dir.join("config.json"),
+            global_config: node_configs_dir.join("global-config.json"),
+            node_configs_dir,
+            binaries_dir,
+            git_cache_dir,
+            root,
         }
     }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn app_config(&self) -> &Path {
+        &self.app_config
+    }
+
+    pub fn binaries_dir(&self) -> &Path {
+        &self.binaries_dir
+    }
+
+    pub fn git_cache_dir(&self) -> &Path {
+        &self.git_cache_dir
+    }
+
+    pub fn node_configs_dir(&self) -> &Path {
+        &self.node_configs_dir
+    }
+
+    pub fn node_config(&self) -> &Path {
+        &self.node_config
+    }
+
+    pub fn global_config(&self) -> &Path {
+        &self.global_config
+    }
+}
+
+fn default_root_dir() -> &'static PathBuf {
+    const ENV: &str = "STEVER_ROOT";
+    const DEFAULT_ROOT_DIR: &str = ".stever";
+
+    static DIRS: OnceBox<PathBuf> = OnceBox::new();
+    DIRS.get_or_init(|| {
+        Box::new(if let Ok(path) = std::env::var(ENV) {
+            PathBuf::from(path)
+        } else {
+            match home_dir() {
+                Some(home) => home.join(DEFAULT_ROOT_DIR),
+                None => {
+                    panic!(
+                        "No valid home directory path could be retrieved from the operating system"
+                    )
+                }
+            }
+        })
+    })
 }

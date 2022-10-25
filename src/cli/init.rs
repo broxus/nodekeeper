@@ -1,16 +1,16 @@
-use std::collections::HashMap;
+use std::borrow::Cow;
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use argh::FromArgs;
 use console::style;
 use dialoguer::theme::Theme;
 use dialoguer::{Confirm, Input, Select};
+use reqwest::Url;
 
-use crate::config::{
-    AppConfig, AppConfigAdnl, AppConfigControl, NodeConfig, NodeConfigAdnl, NodeConfigControlServer,
-};
+use super::ProjectDirs;
+use crate::config::*;
+use crate::node_manager::NodeManager;
 
 use super::CliContext;
 
@@ -18,151 +18,126 @@ use super::CliContext;
 /// Initialize toola environment
 #[argh(subcommand, name = "init")]
 pub struct Cmd {
-    /// path to the validator node config
-    #[argh(positional)]
-    node_config: PathBuf,
+    // TODO: add options for all configurable values
 }
 
 impl Cmd {
     pub async fn run(self, ctx: CliContext) -> Result<()> {
         let theme = &dialoguer::theme::ColorfulTheme::default();
+        let dirs = ctx.dirs();
 
-        let root_dir = ctx.root_dir()?;
+        if !prepare_root_dir(theme, dirs)? {
+            return Ok(());
+        }
 
-        let mut node_config = load_node_config(&self.node_config)?;
-        let mut app_config = match load_app_config(theme, &root_dir, &ctx.config_path)? {
-            Some(app_config) => app_config,
-            None => return Ok(()),
-        };
+        let global_config = load_global_config(theme, dirs).await?;
+        let mut node_config = load_node_config(dirs)?;
+        let mut app_config = load_app_config(dirs)?;
 
-        setup_control_server(
+        if !setup_control_server(theme, dirs, &mut app_config, &mut node_config)? {
+            return Ok(());
+        }
+
+        if !setup_adnl(
             theme,
-            &ctx.config_path,
+            dirs,
             &mut app_config,
-            &self.node_config,
             &mut node_config,
-        )?;
-
-        setup_adnl(
-            theme,
-            &ctx.config_path,
-            &mut app_config,
-            &self.node_config,
-            &mut node_config,
+            &global_config,
         )
-        .await?;
+        .await?
+        {
+            return Ok(());
+        }
+
+        if !setup_binary(theme, dirs).await? {
+            return Ok(());
+        }
 
         Ok(())
     }
 }
 
-fn load_app_config(
-    theme: &dyn Theme,
-    root_dir: impl AsRef<Path>,
-    path: impl AsRef<Path>,
-) -> Result<Option<AppConfig>> {
-    let path = path.as_ref();
-    if path.exists() {
-        return Ok(Some(AppConfig::load(path)?));
+fn prepare_root_dir(theme: &dyn Theme, dirs: &ProjectDirs) -> Result<bool> {
+    let root = dirs.root();
+    if root.exists() {
+        return Ok(true);
     }
 
     if !confirm(
         theme,
-        false,
-        format!(
-            "Config doesn't exist yet. Generate? {}",
-            note(path.display())
-        ),
+        root.is_absolute(),
+        format!("Create stEVER root directory? {}", note(root.display())),
     )? {
-        return Ok(None);
+        return Ok(false);
     }
 
-    std::fs::create_dir_all(root_dir).context("failed create root directory")?;
-
-    let config = AppConfig::default();
-    config.store(path)?;
-
-    Ok(Some(config))
-}
-
-async fn setup_adnl<P: AsRef<Path>>(
-    theme: &dyn Theme,
-    app_config_path: P,
-    app_config: &mut AppConfig,
-    node_config_path: P,
-    node_config: &mut NodeConfig,
-) -> Result<bool> {
-    const DHT_TAG: usize = 1;
-    const OVERLAY_TAG: usize = 2;
-
-    let adnl_port = node_config
-        .get_suggested_adnl_port()
-        .unwrap_or(DEFAULT_ADNL_PORT);
-
-    match (&mut app_config.adnl, node_config.get_adnl_node()?) {
-        (Some(adnl_client), Some(adnl_node)) => {
-            let server_pubkey = adnl_node.overlay_pubkey()?;
-            if adnl_client.server_address != adnl_node.ip_address
-                || adnl_client.server_pubkey != server_pubkey
-            {
-                if !confirm(theme, false, "ADNL node configuration mismatch. Update?")? {
-                    return Ok(false);
-                }
-
-                adnl_client.server_address = adnl_node.ip_address;
-                adnl_client.server_pubkey = server_pubkey;
-                // TODO: update zerostate file hash
-            }
-        }
-        (None, Some(adnl_node)) => {
-            app_config.adnl = Some(AppConfigAdnl {
-                server_address: adnl_node.ip_address,
-                server_pubkey: adnl_node.overlay_pubkey()?,
-                zerostate_file_hash: Default::default(),
-            });
-
-            app_config.store(app_config_path)?;
-        }
-        (_, None) => {
-            let addr: Ipv4Addr = {
-                let public_ip = public_ip::addr_v4().await;
-                let mut input = Input::with_theme(theme);
-                if let Some(public_ip) = public_ip {
-                    input.with_initial_text(public_ip.to_string());
-                }
-                input.with_prompt("Enter public ip").interact_text()?
-            };
-
-            let adnl_port = Input::with_theme(theme)
-                .with_prompt("Specify ADNL port")
-                .with_initial_text(adnl_port.to_string())
-                .interact()?;
-
-            let adnl_node = NodeConfigAdnl::from_addr_and_keys(
-                SocketAddrV4::new(addr, adnl_port),
-                NodeConfigAdnl::generate_keys(),
-            );
-            node_config.set_adnl_node(&adnl_node)?;
-
-            app_config.adnl = Some(AppConfigAdnl {
-                server_address: adnl_node.ip_address,
-                server_pubkey: adnl_node.overlay_pubkey()?,
-                zerostate_file_hash: Default::default(),
-            });
-
-            app_config.store(app_config_path)?;
-            node_config.store(node_config_path)?;
-        }
-    }
-
+    std::fs::create_dir_all(root).context("failed create root directory")?;
     Ok(true)
 }
 
-fn setup_control_server<P: AsRef<Path>>(
+async fn load_global_config(theme: &dyn Theme, dirs: &ProjectDirs) -> Result<GlobalConfig> {
+    let global_config = dirs.global_config();
+    if !global_config.exists() {
+        let data = match Select::with_theme(theme)
+            .with_prompt("Select network")
+            .item("Everscale mainnet")
+            .item("Everscale testnet")
+            .item("other")
+            .default(0)
+            .interact()?
+        {
+            0 => Cow::Borrowed(GlobalConfig::MAINNET),
+            1 => Cow::Borrowed(GlobalConfig::TESTNET),
+            _ => {
+                let url: Url = Input::with_theme(theme)
+                    .with_prompt("Config URL")
+                    .interact_text()?;
+
+                reqwest::get(url)
+                    .await
+                    .context("failed to download global config")?
+                    .text()
+                    .await
+                    .context("failed to download global config")
+                    .map(Cow::Owned)?
+            }
+        };
+
+        std::fs::create_dir_all(dirs.node_configs_dir())
+            .context("failed to create node configs dir")?;
+        dirs.store_global_config(data)?;
+    }
+
+    GlobalConfig::load(global_config)
+}
+
+fn load_node_config(dirs: &ProjectDirs) -> Result<NodeConfig> {
+    let node_config = dirs.node_config();
+    if node_config.exists() {
+        return NodeConfig::load(node_config);
+    }
+
+    let node_config = NodeConfig::generate()?;
+    dirs.store_node_config(&node_config)?;
+    Ok(node_config)
+}
+
+fn load_app_config(dirs: &ProjectDirs) -> Result<AppConfig> {
+    let app_config = dirs.app_config();
+    if app_config.exists() {
+        return AppConfig::load(app_config);
+    }
+
+    let app_config = AppConfig::default();
+    dirs.store_app_config(&app_config)?;
+    Ok(app_config)
+}
+
+fn setup_control_server(
     theme: &dyn Theme,
-    app_config_path: P,
+    dirs: &ProjectDirs,
     app_config: &mut AppConfig,
-    node_config_path: P,
     node_config: &mut NodeConfig,
 ) -> Result<bool> {
     use everscale_crypto::ed25519;
@@ -241,11 +216,11 @@ fn setup_control_server<P: AsRef<Path>>(
             }
 
             if client_changed {
-                app_config.store(app_config_path)?;
+                dirs.store_app_config(app_config)?;
             }
             if server_changed {
                 node_config.set_control_server(&existing_server)?;
-                node_config.store(node_config_path)?;
+                dirs.store_node_config(node_config)?;
             }
         }
         (None, Some(mut existing_server)) => {
@@ -292,11 +267,11 @@ fn setup_control_server<P: AsRef<Path>>(
                 ed25519::PublicKey::from(&existing_server.server_key),
                 client_key,
             ));
-            app_config.store(app_config_path)?;
+            dirs.store_app_config(app_config)?;
 
             if node_config_changed {
                 node_config.set_control_server(&existing_server)?;
-                node_config.store(node_config_path)?;
+                dirs.store_node_config(node_config)?;
             }
         }
         (existing_client, None) => {
@@ -349,18 +324,124 @@ fn setup_control_server<P: AsRef<Path>>(
                 ed25519::PublicKey::from(&client_key),
             ))?;
 
-            app_config.store(app_config_path)?;
-            node_config.store(node_config_path)?;
+            dirs.store_app_config(app_config)?;
+            dirs.store_node_config(node_config)?;
         }
     }
 
     Ok(true)
 }
 
-fn load_node_config<P: AsRef<Path>>(path: P) -> Result<NodeConfig> {
-    let config = std::fs::read_to_string(path).context("failed to read node config")?;
-    let config = serde_json::from_str(&config).context("failed to parse node config")?;
-    Ok(config)
+async fn setup_adnl(
+    theme: &dyn Theme,
+    dirs: &ProjectDirs,
+    app_config: &mut AppConfig,
+    node_config: &mut NodeConfig,
+    global_config: &GlobalConfig,
+) -> Result<bool> {
+    const DHT_TAG: usize = 1;
+    const OVERLAY_TAG: usize = 2;
+
+    let adnl_port = node_config
+        .get_suggested_adnl_port()
+        .unwrap_or(DEFAULT_ADNL_PORT);
+
+    let zerostate_file_hash = *global_config.zero_state.file_hash.as_array();
+
+    match (&mut app_config.adnl, node_config.get_adnl_node()?) {
+        (Some(adnl_client), Some(adnl_node)) => {
+            let server_pubkey = adnl_node.overlay_pubkey()?;
+            if adnl_client.server_address != adnl_node.ip_address
+                || adnl_client.server_pubkey != server_pubkey
+                || adnl_client.zerostate_file_hash != zerostate_file_hash
+            {
+                if !confirm(theme, false, "ADNL node configuration mismatch. Update?")? {
+                    return Ok(false);
+                }
+
+                adnl_client.server_address = adnl_node.ip_address;
+                adnl_client.server_pubkey = server_pubkey;
+                adnl_client.zerostate_file_hash = zerostate_file_hash;
+
+                dirs.store_app_config(app_config)?;
+            }
+        }
+        (None, Some(adnl_node)) => {
+            app_config.adnl = Some(AppConfigAdnl {
+                server_address: adnl_node.ip_address,
+                server_pubkey: adnl_node.overlay_pubkey()?,
+                zerostate_file_hash,
+            });
+
+            app_config.store(dirs.app_config())?;
+        }
+        (_, None) => {
+            let addr: Ipv4Addr = {
+                let public_ip = public_ip::addr_v4().await;
+                let mut input = Input::with_theme(theme);
+                if let Some(public_ip) = public_ip {
+                    input.with_initial_text(public_ip.to_string());
+                }
+                input.with_prompt("Enter public ip").interact_text()?
+            };
+
+            let adnl_port = Input::with_theme(theme)
+                .with_prompt("Specify ADNL port")
+                .with_initial_text(adnl_port.to_string())
+                .interact()?;
+
+            let adnl_node = NodeConfigAdnl::from_addr_and_keys(
+                SocketAddrV4::new(addr, adnl_port),
+                NodeConfigAdnl::generate_keys(),
+            );
+            node_config.set_adnl_node(&adnl_node)?;
+
+            app_config.adnl = Some(AppConfigAdnl {
+                server_address: adnl_node.ip_address,
+                server_pubkey: adnl_node.overlay_pubkey()?,
+                zerostate_file_hash,
+            });
+
+            dirs.store_app_config(app_config)?;
+            dirs.store_node_config(node_config)?;
+        }
+    }
+
+    Ok(true)
+}
+
+async fn setup_binary(theme: &dyn Theme, dirs: &ProjectDirs) -> Result<bool> {
+    let node_binary = dirs.binaries_dir().join("node");
+    if node_binary.exists() {
+        return Ok(true);
+    }
+
+    let node_manager = NodeManager::new(dirs.binaries_dir(), dirs.git_cache_dir())
+        .context("failed to create node manager")?;
+
+    let repo: Url = Input::with_theme(theme)
+        .with_prompt("Node repo URL")
+        .with_initial_text("https://github.com/tonlabs/ton-labs-node.git")
+        .interact_text()?;
+
+    node_manager.install_from_repo(&repo).await?;
+
+    Ok(true)
+}
+
+impl ProjectDirs {
+    fn store_app_config(&self, app_config: &AppConfig) -> Result<()> {
+        app_config.store(self.app_config())
+    }
+
+    fn store_node_config(&self, node_config: &NodeConfig) -> Result<()> {
+        node_config.store(self.node_config())
+    }
+
+    fn store_global_config<D: AsRef<str>>(&self, global_config: D) -> Result<()> {
+        std::fs::write(self.global_config(), global_config.as_ref())
+            .context("failed to write global config")
+    }
 }
 
 fn confirm<T>(theme: &dyn Theme, default: bool, text: T) -> std::io::Result<bool>

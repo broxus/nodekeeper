@@ -11,7 +11,7 @@ use crate::util::{serde_public_key, serde_secret_key};
 
 /// Tool config
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct AppConfig {
     /// Control config
     pub control: Option<AppConfigControl>,
@@ -32,7 +32,6 @@ impl AppConfig {
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         config::Config::builder()
             .add_source(config::File::from(path.as_ref()))
-            .add_source(config::Environment::default())
             .build()
             .context("failed to build config")?
             .try_deserialize()
@@ -40,15 +39,7 @@ impl AppConfig {
     }
 
     pub fn store<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        let data = match path.as_ref().extension() {
-            Some(ext) if ext == "json" => {
-                serde_json::to_string_pretty(self).context("failed to serialize config")?
-            }
-            Some(ext) if ext == "toml" => {
-                toml::to_string_pretty(self).context("failed to serialize config")?
-            }
-            _ => anyhow::bail!("unknown config format"),
-        };
+        let data = toml::to_string_pretty(self).context("failed to serialize config")?;
         std::fs::write(path, data).context("failed to save config")
     }
 
@@ -58,6 +49,7 @@ impl AppConfig {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AppConfigControl {
     /// Control server socket address
     pub server_address: SocketAddrV4,
@@ -96,6 +88,7 @@ impl AppConfigControl {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AppConfigAdnl {
     /// Server ADNL address
     pub server_address: SocketAddrV4,
