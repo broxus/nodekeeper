@@ -67,6 +67,9 @@ impl CliContext {
     }
 }
 
+pub const VALIDATOR_SERVICE: &str = "ever-validator";
+pub const VALIDATOR_MANAGER_SERVICE: &str = "ever-validator-manager";
+
 pub struct ProjectDirs {
     app_config: PathBuf,
     node_config: PathBuf,
@@ -90,8 +93,9 @@ impl ProjectDirs {
         let node_binary = binaries_dir.join("node");
 
         let systemd_root = PathBuf::from("/etc/systemd/system");
-        let validator_service = systemd_root.join("ever-validator.service");
-        let validator_manager_service = systemd_root.join("ever-validator-manager.service");
+        let validator_service = systemd_root.join(format!("{VALIDATOR_SERVICE}.service"));
+        let validator_manager_service =
+            systemd_root.join(format!("{VALIDATOR_MANAGER_SERVICE}.service"));
 
         Self {
             app_config: root.join("config.toml"),

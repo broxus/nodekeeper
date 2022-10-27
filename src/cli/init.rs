@@ -1,5 +1,8 @@
 use std::borrow::Cow;
+use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddrV4};
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
 
 use anyhow::{Context, Result};
 use argh::FromArgs;
@@ -7,12 +10,15 @@ use console::style;
 use dialoguer::theme::Theme;
 use dialoguer::{Confirm, Input, Select};
 use reqwest::Url;
+use tokio::process::Command;
 
-use super::{CliContext, ProjectDirs};
+use super::{CliContext, ProjectDirs, VALIDATOR_MANAGER_SERVICE, VALIDATOR_SERVICE};
 use crate::config::*;
 use crate::util::*;
 
-mod node_manager;
+const DEFAULT_CONTROL_PORT: u16 = 5031;
+const DEFAULT_ADNL_PORT: u16 = 30100;
+const DEFAULT_NODE_REPO: &str = "https://github.com/tonlabs/ton-labs-node.git";
 
 #[derive(FromArgs)]
 /// Prepares configs and binaries
@@ -44,7 +50,7 @@ struct CmdInit;
 
 impl CmdInit {
     async fn run(self, theme: &dyn Theme, dirs: &ProjectDirs) -> Result<()> {
-        println!("{} Preparing configs.", step(0, 2));
+        println!("{} Preparing configs", step(0, 2));
 
         if !prepare_root_dir(theme, dirs)? {
             return Ok(());
@@ -70,7 +76,7 @@ impl CmdInit {
             return Ok(());
         }
 
-        println!("{} Preparing binary.", step(1, 2));
+        println!("{} Preparing binary", step(1, 2));
 
         if !setup_binary(theme, dirs).await? {
             return Ok(());
@@ -92,6 +98,8 @@ struct CmdInitSystemd {}
 impl CmdInitSystemd {
     async fn run(self, theme: &dyn Theme, dirs: &ProjectDirs) -> Result<()> {
         const ROOT_USER: &str = "root";
+
+        println!("{} Preparing services", step(0, 2));
 
         // SAFETY: no errors are defined
         let uid = unsafe { libc::getuid() };
@@ -121,7 +129,40 @@ impl CmdInitSystemd {
                 .unwrap_or(Cow::Borrowed(ROOT_USER))
         };
 
-        dirs.create_systemd_services(&user)?;
+        let print_service = |path: &Path| {
+            println!(
+                "{}",
+                style(format!("Created validator service at {}", path.display())).dim()
+            );
+        };
+
+        dirs.create_systemd_validator_service(&user)?;
+        print_service(dirs.validator_service());
+
+        dirs.create_systemd_validator_manager_service(&user)?;
+        print_service(dirs.validator_manager_service());
+
+        println!("{} Reloading systemd configs", step(1, 2));
+        systemd_daemon_reload().await?;
+
+        println!(
+            r"{} Systemd services are configured now. Great!",
+            step(2, 2)
+        );
+
+        let services = [VALIDATOR_SERVICE, VALIDATOR_MANAGER_SERVICE];
+        systemd_set_sercices_enabled(
+            services,
+            confirm(theme, true, "Enable autostart services at system startup?")?,
+        )
+        .await?;
+
+        if confirm(theme, true, "Restart systemd services?")? {
+            for service in services {
+                systemd_restart_service(service).await?;
+            }
+        }
+
         Ok(())
     }
 }
@@ -511,6 +552,47 @@ fn check_systemd_service(dirs: &ProjectDirs) -> Result<()> {
     Ok(())
 }
 
+macro_rules! validator_service {
+    () => {
+        r#"[Unit]
+Description=Everscale Validator Node
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=1
+User={user}
+LimitNOFILE=2048000
+ExecStart={node_binary} --configs {configs_dir}
+
+[Install]
+WantedBy=multi-user.target
+"#
+    };
+}
+
+macro_rules! validator_manager_service {
+    () => {
+        r#"[Unit]
+Description=Everscale Validator Manager
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=1
+User={user}
+ExecStart={stever_binary} --root {root_dir} validate
+
+[Install]
+WantedBy=multi-user.target
+"#
+    };
+}
+
 impl ProjectDirs {
     fn store_app_config(&self, app_config: &AppConfig) -> Result<()> {
         app_config.store(self.app_config())
@@ -524,6 +606,176 @@ impl ProjectDirs {
         std::fs::write(self.global_config(), global_config.as_ref())
             .context("failed to write global config")
     }
+
+    pub fn prepare_binaries_dir(&self) -> Result<()> {
+        let binaries_dir = self.binaries_dir();
+        if !binaries_dir.exists() {
+            std::fs::create_dir_all(binaries_dir).context("failed to create binaries directory")?;
+        }
+        Ok(())
+    }
+
+    pub async fn install_node_from_repo(&self, repo: &Url) -> Result<()> {
+        let git_dir = self.git_cache_dir();
+        if !git_dir.exists() {
+            std::fs::create_dir_all(&git_dir).context("failed to create git cache directory")?;
+        }
+
+        let repo_dir = git_dir.join("ton-labs-node");
+
+        clone_repo(repo, &repo_dir).await?;
+        let binary = build_node(repo_dir).await?;
+
+        std::fs::copy(binary, self.node_binary()).context("failed to copy node binary")?;
+        Ok(())
+    }
+
+    pub fn create_systemd_validator_service(&self, user: &str) -> Result<()> {
+        let node = std::fs::canonicalize(self.node_binary())
+            .context("failed to canonicalize node binary path")?;
+        let node_configs_dir = std::fs::canonicalize(self.node_configs_dir())
+            .context("failed to canonicalize node configs path")?;
+
+        let validator_service = format!(
+            validator_service!(),
+            user = user,
+            node_binary = node.display(),
+            configs_dir = node_configs_dir.display()
+        );
+        std::fs::write(self.validator_service(), validator_service)
+            .context("failed to create systemd validator service")?;
+
+        Ok(())
+    }
+
+    pub fn create_systemd_validator_manager_service(&self, user: &str) -> Result<()> {
+        let current_exe = std::env::current_exe()?;
+        let root_dir = std::fs::canonicalize(self.root())
+            .context("failed to canonicalize root directory path")?;
+
+        let validator_manager_service = format!(
+            validator_manager_service!(),
+            user = user,
+            stever_binary = current_exe.display(),
+            root_dir = root_dir.display(),
+        );
+        std::fs::write(self.validator_manager_service(), validator_manager_service)
+            .context("failed to create systemd validator manager service")?;
+
+        Ok(())
+    }
+}
+
+async fn systemd_restart_service(service: &str) -> Result<()> {
+    exec(
+        Command::new("systemctl")
+            .stdout(Stdio::piped())
+            .arg("restart")
+            .arg(service),
+    )
+    .await
+    .with_context(|| format!("failed to restart service {service}"))
+}
+
+async fn systemd_set_sercices_enabled<'a, I: IntoIterator<Item = &'a str>>(
+    services: I,
+    enabled: bool,
+) -> Result<()> {
+    let mut command = Command::new("systemctl");
+    command
+        .stdout(Stdio::piped())
+        .arg(if enabled { "enable" } else { "disable" });
+
+    for service in services {
+        command.arg(service);
+    }
+
+    exec(&mut command)
+        .await
+        .context("failed to enable services")
+}
+
+async fn systemd_daemon_reload() -> Result<()> {
+    exec(
+        Command::new("systemctl")
+            .stdout(Stdio::piped())
+            .arg("daemon-reload"),
+    )
+    .await
+    .context("failed to reload systemd configs")
+}
+
+async fn clone_repo<P: AsRef<Path>>(url: &Url, target: P) -> Result<()> {
+    let target = target.as_ref();
+    if target.exists() {
+        std::fs::remove_dir_all(target).context("failed to remove old git directory")?;
+    }
+
+    exec(
+        Command::new("git")
+            .stdout(Stdio::piped())
+            .arg("clone")
+            .arg("--recursive")
+            .arg(url.to_string())
+            .arg(target),
+    )
+    .await
+    .context("failed to clone repo")
+}
+
+async fn build_node<P: AsRef<Path>>(target: P) -> Result<PathBuf> {
+    let target = target.as_ref();
+
+    exec(
+        Command::new("cargo")
+            .current_dir(target)
+            .stdout(Stdio::piped())
+            .arg("build")
+            .arg("--release"),
+    )
+    .await
+    .context("failed to build node")?;
+
+    Ok(target.join("target").join("release").join("ton_node"))
+}
+
+async fn exec(command: &mut Command) -> Result<()> {
+    let mut child = command.spawn()?;
+
+    let status = child
+        .wait()
+        .await
+        .context("child process encountered an error")?;
+
+    anyhow::ensure!(
+        status.success(),
+        "child process failed with exit code {status}"
+    );
+    Ok(())
+}
+
+async fn get_node_version<P: AsRef<Path>>(node: P) -> Result<String> {
+    let child = Command::new(node.as_ref())
+        .arg("--version")
+        .output()
+        .await
+        .context("failed to run node binary")?;
+
+    if !child.status.success() {
+        std::io::stderr().write_all(&child.stdout)?;
+        anyhow::bail!("node finished with exit code {}", child.status);
+    }
+
+    parse_node_version(&child.stdout)
+        .map(String::from)
+        .context("invalid node output during version check")
+}
+
+fn parse_node_version(output: &[u8]) -> Option<&str> {
+    output
+        .strip_prefix(b"TON Node, version ")
+        .and_then(|output| output.split(|&ch| ch == b'\n').next())
+        .and_then(|output| std::str::from_utf8(output).ok())
 }
 
 fn confirm<T>(theme: &dyn Theme, default: bool, text: T) -> std::io::Result<bool>
@@ -544,6 +796,30 @@ fn step(i: usize, total: usize) -> impl std::fmt::Display {
     style(format!("[{i}/{total}]")).bold().dim()
 }
 
-const DEFAULT_CONTROL_PORT: u16 = 5031;
-const DEFAULT_ADNL_PORT: u16 = 30100;
-const DEFAULT_NODE_REPO: &str = "https://github.com/tonlabs/ton-labs-node.git";
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn correct_version_parser() {
+        const STDOUT: &[u8] = b"TON Node, version 0.51.1
+Rust: rustc 1.61.0 (fe5b13d68 2022-05-18)
+TON NODE git commit:         Not set
+ADNL git commit:             Not set
+DHT git commit:              Not set
+OVERLAY git commit:          Not set
+RLDP git commit:             Not set
+TON_BLOCK git commit:        Not set
+TON_BLOCK_JSON git commit:   Not set
+TON_SDK git commit:          Not set
+TON_EXECUTOR git commit:     Not set
+TON_TL git commit:           Not set
+TON_TYPES git commit:        Not set
+TON_VM git commit:           Not set
+TON_ABI git commit:     Not set
+
+TON node ";
+
+        assert_eq!(parse_node_version(STDOUT), Some("0.51.1"));
+    }
+}
