@@ -10,6 +10,7 @@ use reqwest::Url;
 
 use super::{CliContext, ProjectDirs};
 use crate::config::*;
+use crate::util::*;
 
 mod node_manager;
 
@@ -26,6 +27,23 @@ impl Cmd {
         let theme = &dialoguer::theme::ColorfulTheme::default();
         let dirs = ctx.dirs();
 
+        match self.subcommand {
+            None => CmdInit.run(theme, dirs).await,
+            Some(SubCmd::Systemd(cmd)) => cmd.run(theme, dirs).await,
+        }
+    }
+}
+
+#[derive(FromArgs)]
+#[argh(subcommand)]
+enum SubCmd {
+    Systemd(CmdInitSystemd),
+}
+
+struct CmdInit;
+
+impl CmdInit {
+    async fn run(self, theme: &dyn Theme, dirs: &ProjectDirs) -> Result<()> {
         println!("{} Preparing configs.", step(0, 2));
 
         if !prepare_root_dir(theme, dirs)? {
@@ -67,15 +85,46 @@ impl Cmd {
 }
 
 #[derive(FromArgs)]
-#[argh(subcommand)]
-enum SubCmd {
-    Systemd(CmdInitSystemd),
-}
-
-#[derive(FromArgs)]
 /// Creates systemd services (`ever-validator` and `ever-validator-manager`)
 #[argh(subcommand, name = "systemd")]
 struct CmdInitSystemd {}
+
+impl CmdInitSystemd {
+    async fn run(self, theme: &dyn Theme, dirs: &ProjectDirs) -> Result<()> {
+        const ROOT_USER: &str = "root";
+
+        // SAFETY: no errors are defined
+        let uid = unsafe { libc::getuid() };
+        let other_user = match uid {
+            0 => match system::get_sudo_uid()? {
+                Some(0) => None,
+                uid => uid,
+            },
+            uid => Some(uid),
+        };
+
+        let user = if let Some(uid) = other_user {
+            let other_user = system::user_name(uid).context("failed to get user name")?;
+            match Select::with_theme(theme)
+                .with_prompt("Select the user from which the service will work")
+                .item(&other_user)
+                .item("root")
+                .default(0)
+                .interact()?
+            {
+                0 => Cow::Owned(other_user),
+                _ => Cow::Borrowed(ROOT_USER),
+            }
+        } else {
+            system::user_name(uid)
+                .map(Cow::Owned)
+                .unwrap_or(Cow::Borrowed(ROOT_USER))
+        };
+
+        dirs.create_systemd_services(&user)?;
+        Ok(())
+    }
+}
 
 fn prepare_root_dir(theme: &dyn Theme, dirs: &ProjectDirs) -> Result<bool> {
     let root = dirs.root();

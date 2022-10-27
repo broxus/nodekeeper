@@ -19,6 +19,7 @@ StartLimitIntervalSec=0
 Type=simple
 Restart=always
 RestartSec=1
+User={user}
 LimitNOFILE=2048000
 ExecStart={node_binary} --configs {configs_dir}
 
@@ -52,7 +53,7 @@ impl ProjectDirs {
         Ok(())
     }
 
-    pub fn create_systemd_services(&self) -> Result<()> {
+    pub fn create_systemd_services(&self, user: &str) -> Result<()> {
         let node = std::fs::canonicalize(self.binaries_dir())
             .context("failed to canonicalize node binary path")?;
         let configs_dir = std::fs::canonicalize(self.node_configs_dir())
@@ -60,6 +61,7 @@ impl ProjectDirs {
 
         let service = format!(
             validator_service!(),
+            user = user,
             node_binary = node.display(),
             configs_dir = configs_dir.display()
         );

@@ -150,7 +150,6 @@ impl ProjectDirs {
 
 fn default_root_dir() -> &'static PathBuf {
     const ENV: &str = "STEVER_ROOT";
-    const SUDO_UID: &str = "SUDO_UID";
     const DEFAULT_ROOT_DIR: &str = ".stever";
 
     static DIRS: OnceBox<PathBuf> = OnceBox::new();
@@ -158,10 +157,8 @@ fn default_root_dir() -> &'static PathBuf {
         Box::new(if let Ok(path) = std::env::var(ENV) {
             PathBuf::from(path)
         } else {
-            let home_dir = if let Ok(sudo_uid) = std::env::var(SUDO_UID) {
-                // handle `sudo` case
-                let uid = sudo_uid.parse().expect("invalid SUDO_UID");
-                home_dir_from_passwd(uid)
+            let home_dir = if let Some(uid) = system::get_sudo_uid().unwrap() {
+                system::home_dir(uid)
             } else {
                 home_dir()
             };
