@@ -4,35 +4,67 @@ use std::process::Stdio;
 
 use anyhow::{Context, Result};
 use reqwest::Url;
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
-pub struct NodeManager {
-    binaries_dir: PathBuf,
-    git_dir: PathBuf,
+use super::ProjectDirs;
+
+macro_rules! validator_service {
+    () => {
+        r#"[Unit]
+Description=Everscale Validator Node
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=1
+LimitNOFILE=2048000
+ExecStart={node_binary} --configs {configs_dir}
+
+[Install]
+WantedBy=multi-user.target
+"#
+    };
 }
 
-impl NodeManager {
-    pub fn new(binaries_dir: impl AsRef<Path>, git_dir: impl AsRef<Path>) -> Result<Self> {
-        let binaries_dir = binaries_dir.as_ref().to_path_buf();
+impl ProjectDirs {
+    pub fn prepare_binaries_dir(&self) -> Result<()> {
+        let binaries_dir = self.binaries_dir();
         if !binaries_dir.exists() {
-            std::fs::create_dir_all(&binaries_dir)
-                .context("failed to create binaries directory")?;
+            std::fs::create_dir_all(binaries_dir).context("failed to create binaries directory")?;
         }
+        Ok(())
+    }
 
-        let git_dir = git_dir.as_ref().to_path_buf();
+    pub async fn install_node_from_repo(&self, repo: &Url) -> Result<()> {
+        let git_dir = self.git_cache_dir();
         if !git_dir.exists() {
             std::fs::create_dir_all(&git_dir).context("failed to create git cache directory")?;
         }
 
-        Ok(Self {
-            binaries_dir,
-            git_dir,
-        })
+        let repo_dir = git_dir.join("ton-labs-node");
+
+        clone_repo(repo, &repo_dir).await?;
+        let binary = build_node(repo_dir).await?;
+
+        std::fs::copy(binary, self.node_binary()).context("failed to copy node binary")?;
+        Ok(())
     }
 
-    pub async fn install_from_repo(&self, repo: &Url) -> Result<()> {
-        clone_repo(repo, self.git_dir.join("ton-labs-node")).await
+    pub fn create_systemd_services(&self) -> Result<()> {
+        let node = std::fs::canonicalize(self.binaries_dir())
+            .context("failed to canonicalize node binary path")?;
+        let configs_dir = std::fs::canonicalize(self.node_configs_dir())
+            .context("failed to canonicalize node configs path")?;
+
+        let service = format!(
+            validator_service!(),
+            node_binary = node.display(),
+            configs_dir = configs_dir.display()
+        );
+
+        Ok(())
     }
 }
 
@@ -60,6 +92,28 @@ async fn clone_repo<P: AsRef<Path>>(url: &Url, target: P) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn build_node<P: AsRef<Path>>(target: P) -> Result<PathBuf> {
+    let target = target.as_ref();
+
+    let mut child = Command::new("cargo")
+        .current_dir(target)
+        .stdout(Stdio::piped())
+        .arg("build")
+        .arg("--release")
+        .spawn()?;
+
+    let status = child
+        .wait()
+        .await
+        .context("child process encountered an error")?;
+
+    if !status.success() {
+        anyhow::bail!("failed to build node");
+    }
+
+    Ok(target.join("target").join("release").join("ton_node"))
 }
 
 async fn get_node_version<P: AsRef<Path>>(node: P) -> Result<String> {

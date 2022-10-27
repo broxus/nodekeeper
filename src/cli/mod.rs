@@ -6,6 +6,7 @@ use home::home_dir;
 use once_cell::race::OnceBox;
 
 use crate::config::*;
+use crate::util::*;
 
 pub mod contract;
 pub mod exporter;
@@ -72,8 +73,11 @@ pub struct ProjectDirs {
     global_config: PathBuf,
     node_configs_dir: PathBuf,
     binaries_dir: PathBuf,
+    node_binary: PathBuf,
     git_cache_dir: PathBuf,
     root: PathBuf,
+    validator_service: PathBuf,
+    validator_manager_service: PathBuf,
 }
 
 impl ProjectDirs {
@@ -83,14 +87,23 @@ impl ProjectDirs {
         let binaries_dir = root.join("bin");
         let git_cache_dir = root.join("git");
 
+        let node_binary = binaries_dir.join("node");
+
+        let systemd_root = PathBuf::from("/etc/systemd/system");
+        let validator_service = systemd_root.join("ever-validator.service");
+        let validator_manager_service = systemd_root.join("ever-validator-manager.service");
+
         Self {
             app_config: root.join("config.toml"),
             node_config: node_configs_dir.join("config.json"),
             global_config: node_configs_dir.join("global-config.json"),
             node_configs_dir,
             binaries_dir,
+            node_binary,
             git_cache_dir,
             root,
+            validator_service,
+            validator_manager_service,
         }
     }
 
@@ -104,6 +117,10 @@ impl ProjectDirs {
 
     pub fn binaries_dir(&self) -> &Path {
         &self.binaries_dir
+    }
+
+    pub fn node_binary(&self) -> &Path {
+        &self.node_binary
     }
 
     pub fn git_cache_dir(&self) -> &Path {
@@ -121,10 +138,19 @@ impl ProjectDirs {
     pub fn global_config(&self) -> &Path {
         &self.global_config
     }
+
+    pub fn validator_service(&self) -> &Path {
+        &self.validator_service
+    }
+
+    pub fn validator_manager_service(&self) -> &Path {
+        &self.validator_manager_service
+    }
 }
 
 fn default_root_dir() -> &'static PathBuf {
     const ENV: &str = "STEVER_ROOT";
+    const SUDO_UID: &str = "SUDO_UID";
     const DEFAULT_ROOT_DIR: &str = ".stever";
 
     static DIRS: OnceBox<PathBuf> = OnceBox::new();
@@ -132,7 +158,15 @@ fn default_root_dir() -> &'static PathBuf {
         Box::new(if let Ok(path) = std::env::var(ENV) {
             PathBuf::from(path)
         } else {
-            match home_dir() {
+            let home_dir = if let Ok(sudo_uid) = std::env::var(SUDO_UID) {
+                // handle `sudo` case
+                let uid = sudo_uid.parse().expect("invalid SUDO_UID");
+                home_dir_from_passwd(uid)
+            } else {
+                home_dir()
+            };
+
+            match home_dir {
                 Some(home) => home.join(DEFAULT_ROOT_DIR),
                 None => {
                     panic!(

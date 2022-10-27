@@ -8,23 +8,25 @@ use dialoguer::theme::Theme;
 use dialoguer::{Confirm, Input, Select};
 use reqwest::Url;
 
-use super::ProjectDirs;
+use super::{CliContext, ProjectDirs};
 use crate::config::*;
-use crate::node_manager::NodeManager;
 
-use super::CliContext;
+mod node_manager;
 
 #[derive(FromArgs)]
-/// Initialize toola environment
+/// Prepares configs and binaries
 #[argh(subcommand, name = "init")]
 pub struct Cmd {
-    // TODO: add options for all configurable values
+    #[argh(subcommand)]
+    subcommand: Option<SubCmd>,
 }
 
 impl Cmd {
     pub async fn run(self, ctx: CliContext) -> Result<()> {
         let theme = &dialoguer::theme::ColorfulTheme::default();
         let dirs = ctx.dirs();
+
+        println!("{} Preparing configs.", step(0, 2));
 
         if !prepare_root_dir(theme, dirs)? {
             return Ok(());
@@ -50,13 +52,30 @@ impl Cmd {
             return Ok(());
         }
 
+        println!("{} Preparing binary.", step(1, 2));
+
         if !setup_binary(theme, dirs).await? {
             return Ok(());
         }
 
+        println!(r"{} Validator node is configured now. Great!", step(2, 2));
+
+        check_systemd_service(dirs)?;
+
         Ok(())
     }
 }
+
+#[derive(FromArgs)]
+#[argh(subcommand)]
+enum SubCmd {
+    Systemd(CmdInitSystemd),
+}
+
+#[derive(FromArgs)]
+/// Creates systemd services (`ever-validator` and `ever-validator-manager`)
+#[argh(subcommand, name = "systemd")]
+struct CmdInitSystemd {}
 
 fn prepare_root_dir(theme: &dyn Theme, dirs: &ProjectDirs) -> Result<bool> {
     let root = dirs.root();
@@ -411,22 +430,36 @@ async fn setup_adnl(
 }
 
 async fn setup_binary(theme: &dyn Theme, dirs: &ProjectDirs) -> Result<bool> {
-    let node_binary = dirs.binaries_dir().join("node");
-    if node_binary.exists() {
+    if dirs.node_binary().exists() {
         return Ok(true);
     }
-
-    let node_manager = NodeManager::new(dirs.binaries_dir(), dirs.git_cache_dir())
-        .context("failed to create node manager")?;
+    dirs.prepare_binaries_dir()?;
 
     let repo: Url = Input::with_theme(theme)
         .with_prompt("Node repo URL")
-        .with_initial_text("https://github.com/tonlabs/ton-labs-node.git")
+        .with_initial_text(DEFAULT_NODE_REPO)
         .interact_text()?;
 
-    node_manager.install_from_repo(&repo).await?;
-
+    dirs.install_node_from_repo(&repo).await?;
     Ok(true)
+}
+
+fn check_systemd_service(dirs: &ProjectDirs) -> Result<()> {
+    use std::ffi::OsStr;
+
+    let current_exe = std::env::current_exe()?;
+    let current_exe = current_exe
+        .file_name()
+        .unwrap_or(OsStr::new("stever"))
+        .to_string_lossy();
+
+    if !dirs.validator_service().exists() || !dirs.validator_manager_service().exists() {
+        println!(
+            "\nTo configure systemd services, run:\n    sudo {} init systemd",
+            current_exe
+        );
+    }
+    Ok(())
 }
 
 impl ProjectDirs {
@@ -464,3 +497,4 @@ fn step(i: usize, total: usize) -> impl std::fmt::Display {
 
 const DEFAULT_CONTROL_PORT: u16 = 5031;
 const DEFAULT_ADNL_PORT: u16 = 30100;
+const DEFAULT_NODE_REPO: &str = "https://github.com/tonlabs/ton-labs-node.git";
