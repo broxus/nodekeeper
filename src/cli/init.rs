@@ -50,8 +50,13 @@ enum SubCmd {
 struct CmdInit;
 
 impl CmdInit {
+    const STEPS: usize = 2;
+
     async fn run(self, theme: &dyn Theme, dirs: &ProjectDirs) -> Result<()> {
-        println!("{} Preparing configs", step(0, 2));
+        let is_root = system::is_root();
+        let mut steps = Steps::new(Self::STEPS + CmdInitSystemd::STEPS * (is_root as usize));
+
+        steps.next("Preparing configs");
 
         if !prepare_root_dir(theme, dirs)? {
             return Ok(());
@@ -79,15 +84,25 @@ impl CmdInit {
 
         setup_node_db(theme, dirs, &mut node_config)?;
 
-        println!("{} Preparing binary", step(1, 2));
+        steps.next("Preparing binary");
 
         if !setup_binary(theme, dirs).await? {
             return Ok(());
         }
 
-        println!(r"{} Validator node is configured now. Great!", step(2, 2));
+        if is_root {
+            steps.next("Preparing services");
+            prepare_services(theme, dirs)?;
 
-        check_systemd_service(dirs)?;
+            steps.next("Reloading systemd configs");
+            systemd_daemon_reload().await?;
+
+            steps.next("Validator node is configured now. Great!");
+            start_services(theme).await?;
+        } else {
+            steps.next("Validator node is configured now. Great!");
+            check_systemd_service(dirs)?;
+        }
 
         Ok(())
     }
@@ -99,72 +114,19 @@ impl CmdInit {
 struct CmdInitSystemd {}
 
 impl CmdInitSystemd {
+    const STEPS: usize = 2;
+
     async fn run(self, theme: &dyn Theme, dirs: &ProjectDirs) -> Result<()> {
-        const ROOT_USER: &str = "root";
+        let mut steps = Steps::new(Self::STEPS);
 
-        println!("{} Preparing services", step(0, 2));
+        steps.next("Preparing services");
+        prepare_services(theme, dirs)?;
 
-        // SAFETY: no errors are defined
-        let uid = unsafe { libc::getuid() };
-        let other_user = match uid {
-            0 => match system::get_sudo_uid()? {
-                Some(0) => None,
-                uid => uid,
-            },
-            uid => Some(uid),
-        };
-
-        let user = if let Some(uid) = other_user {
-            let other_user = system::user_name(uid).context("failed to get user name")?;
-            match Select::with_theme(theme)
-                .with_prompt("Select the user from which the service will work")
-                .item(&other_user)
-                .item("root")
-                .default(0)
-                .interact()?
-            {
-                0 => Cow::Owned(other_user),
-                _ => Cow::Borrowed(ROOT_USER),
-            }
-        } else {
-            system::user_name(uid)
-                .map(Cow::Owned)
-                .unwrap_or(Cow::Borrowed(ROOT_USER))
-        };
-
-        let print_service = |path: &Path| {
-            println!(
-                "{}",
-                style(format!("Created validator service at {}", path.display())).dim()
-            );
-        };
-
-        dirs.create_systemd_validator_service(&user)?;
-        print_service(dirs.validator_service());
-
-        dirs.create_systemd_validator_manager_service(&user)?;
-        print_service(dirs.validator_manager_service());
-
-        println!("{} Reloading systemd configs", step(1, 2));
+        steps.next("Reloading systemd configs");
         systemd_daemon_reload().await?;
 
-        println!(
-            r"{} Systemd services are configured now. Great!",
-            step(2, 2)
-        );
-
-        let services = [VALIDATOR_SERVICE, VALIDATOR_MANAGER_SERVICE];
-        systemd_set_sercices_enabled(
-            services,
-            confirm(theme, true, "Enable autostart services at system startup?")?,
-        )
-        .await?;
-
-        if confirm(theme, true, "Restart systemd services?")? {
-            for service in services {
-                systemd_restart_service(service).await?;
-            }
-        }
+        steps.next("Systemd services are configured now. Great!");
+        start_services(theme).await?;
 
         Ok(())
     }
@@ -645,6 +607,69 @@ fn check_systemd_service(dirs: &ProjectDirs) -> Result<()> {
     Ok(())
 }
 
+fn prepare_services(theme: &dyn Theme, dirs: &ProjectDirs) -> Result<()> {
+    const ROOT_USER: &str = "root";
+
+    let uid = system::user_id();
+    let other_user = match uid {
+        0 => match system::get_sudo_uid()? {
+            Some(0) => None,
+            uid => uid,
+        },
+        uid => Some(uid),
+    };
+
+    let user = if let Some(uid) = other_user {
+        let other_user = system::user_name(uid).context("failed to get user name")?;
+        match Select::with_theme(theme)
+            .with_prompt("Select the user from which the service will work")
+            .item(&other_user)
+            .item("root")
+            .default(0)
+            .interact()?
+        {
+            0 => Cow::Owned(other_user),
+            _ => Cow::Borrowed(ROOT_USER),
+        }
+    } else {
+        system::user_name(uid)
+            .map(Cow::Owned)
+            .unwrap_or(Cow::Borrowed(ROOT_USER))
+    };
+
+    let print_service = |path: &Path| {
+        println!(
+            "{}",
+            style(format!("Created validator service at {}", path.display())).dim()
+        );
+    };
+
+    dirs.create_systemd_validator_service(&user)?;
+    print_service(dirs.validator_service());
+
+    dirs.create_systemd_validator_manager_service(&user)?;
+    print_service(dirs.validator_manager_service());
+
+    Ok(())
+}
+
+async fn start_services(theme: &dyn Theme) -> Result<()> {
+    let services = [VALIDATOR_SERVICE, VALIDATOR_MANAGER_SERVICE];
+    systemd_set_sercices_enabled(
+        services,
+        confirm(theme, true, "Enable autostart services at system startup?")?,
+    )
+    .await?;
+
+    if confirm(theme, true, "Restart systemd services?")? {
+        for service in services {
+            systemd_restart_service(service).await?;
+        }
+    }
+
+    Ok(())
+}
+
 macro_rules! validator_service {
     () => {
         r#"[Unit]
@@ -885,8 +910,25 @@ fn note(text: impl std::fmt::Display) -> impl std::fmt::Display {
     style(format!("({text})")).dim()
 }
 
-fn step(i: usize, total: usize) -> impl std::fmt::Display {
-    style(format!("[{i}/{total}]")).bold().dim()
+struct Steps {
+    total: usize,
+    current: usize,
+}
+
+impl Steps {
+    fn new(total: usize) -> Self {
+        Self { total, current: 0 }
+    }
+
+    fn next(&mut self, text: impl std::fmt::Display) {
+        println!(
+            "{} {text}",
+            style(format!("[{}/{}]", self.current, self.total))
+                .bold()
+                .dim()
+        );
+        self.current += 1;
+    }
 }
 
 #[cfg(test)]

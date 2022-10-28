@@ -6,11 +6,20 @@ use std::ptr;
 
 use anyhow::{Context, Result};
 
+pub fn is_root() -> bool {
+    user_id() == 0
+}
+
 pub fn get_sudo_uid() -> Result<Option<u32>> {
     match std::env::var("SUDO_UID") {
         Ok(uid) => Ok(Some(uid.parse().context("invalid SUDO_UID")?)),
         Err(_) => Ok(None),
     }
+}
+
+pub fn user_id() -> u32 {
+    // SAFETY: no errors are defined
+    unsafe { libc::getuid() }
 }
 
 pub fn user_name(uid: u32) -> Option<String> {
