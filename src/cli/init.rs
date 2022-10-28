@@ -395,10 +395,10 @@ fn setup_control_server(
                 return Ok(false);
             }
 
-            if existing_client.is_some() {
-                if !confirm(theme, false, "Overwrite stEVER control server config?")? {
-                    return Ok(false);
-                }
+            if existing_client.is_some()
+                && !confirm(theme, false, "Overwrite stEVER control server config?")?
+            {
+                return Ok(false);
             }
 
             const LISTEN_ADDR_ITEMS: [(&str, Ipv4Addr); 2] = [
@@ -633,7 +633,7 @@ fn check_systemd_service(dirs: &ProjectDirs) -> Result<()> {
     let current_exe = std::env::current_exe()?;
     let current_exe = current_exe
         .file_name()
-        .unwrap_or(OsStr::new("stever"))
+        .unwrap_or_else(|| OsStr::new("stever"))
         .to_string_lossy();
 
     if !dirs.validator_service().exists() || !dirs.validator_manager_service().exists() {

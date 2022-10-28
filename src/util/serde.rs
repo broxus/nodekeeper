@@ -1,31 +1,5 @@
 use everscale_crypto::ed25519;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-pub mod serde_optional_public_key {
-    use super::*;
-
-    pub fn serialize<S: Serializer>(
-        public: &Option<ed25519::PublicKey>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        #[derive(Serialize)]
-        struct Helper<'a>(#[serde(with = "serde_public_key")] &'a ed25519::PublicKey);
-
-        public.as_ref().map(Helper).serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<Option<ed25519::PublicKey>, D::Error> {
-        #[derive(Deserialize)]
-        struct Helper(#[serde(with = "serde_public_key")] ed25519::PublicKey);
-
-        match Option::<Helper>::deserialize(deserializer)? {
-            Some(Helper(public)) => Ok(Some(public)),
-            None => Ok(None),
-        }
-    }
-}
+use serde::{Deserialize, Deserializer, Serializer};
 
 pub mod serde_public_key {
     use super::*;

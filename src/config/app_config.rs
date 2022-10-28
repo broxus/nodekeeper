@@ -10,22 +10,13 @@ use serde::{Deserialize, Serialize};
 use crate::util::{serde_public_key, serde_secret_key};
 
 /// Tool config
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AppConfig {
     /// Control config
     pub control: Option<AppConfigControl>,
     /// ADNL config
     pub adnl: Option<AppConfigAdnl>,
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            control: None,
-            adnl: None,
-        }
-    }
 }
 
 impl AppConfig {
