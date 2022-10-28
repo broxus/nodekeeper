@@ -38,12 +38,8 @@ impl NodeConfig {
         std::fs::write(path, data).context("failed to write node config")
     }
 
-    pub fn get_global_config_path(&self) -> Result<Option<PathBuf>> {
-        self.get_field(Self::GLOBAL_CONFIG_PATH)
-    }
-
-    pub fn set_global_config_path(&mut self, path: &str) -> Result<()> {
-        self.set_field(Self::GLOBAL_CONFIG_PATH, path)
+    pub fn set_global_config_path<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
+        self.set_field(Self::GLOBAL_CONFIG_PATH, path.as_ref())
     }
 
     pub fn get_internal_db_path(&self) -> Result<Option<PathBuf>> {

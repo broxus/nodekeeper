@@ -82,7 +82,7 @@ impl CmdInit {
             return Ok(());
         }
 
-        setup_node_db(theme, dirs, &mut node_config)?;
+        setup_node_config_paths(theme, dirs, &mut node_config)?;
 
         steps.next("Preparing binary");
 
@@ -484,7 +484,7 @@ async fn setup_adnl(
     Ok(true)
 }
 
-fn setup_node_db(
+fn setup_node_config_paths(
     theme: &dyn Theme,
     dirs: &ProjectDirs,
     node_config: &mut NodeConfig,
@@ -548,8 +548,11 @@ fn setup_node_db(
         }
     }
 
-    if let Some(node_config) = node_config.get_internal_db_path()? {
-        if node_config != PathBuf::from(DB_PATH_FALLBACK) {
+    node_config.set_global_config_path(dirs.global_config())?;
+
+    if let Some(db_path) = node_config.get_internal_db_path()? {
+        if db_path != PathBuf::from(DB_PATH_FALLBACK) {
+            dirs.store_node_config(node_config)?;
             return Ok(());
         }
     }
