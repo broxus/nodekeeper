@@ -10,7 +10,7 @@ use ton_block::Deserializable;
 mod spinner;
 
 pub fn print_output<T: std::fmt::Display>(arg: T) {
-    if atty::is(atty::Stream::Stdout) {
+    if console::user_attended() {
         writeln!(std::io::stdout(), "{arg:#}")
     } else {
         write!(std::io::stdout(), "{arg}")

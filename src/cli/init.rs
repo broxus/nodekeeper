@@ -19,6 +19,7 @@ use crate::util::*;
 const DEFAULT_CONTROL_PORT: u16 = 5031;
 const DEFAULT_ADNL_PORT: u16 = 30100;
 const DEFAULT_NODE_REPO: &str = "https://github.com/tonlabs/ton-labs-node.git";
+const DEFAULT_NODE_DB_PATH: &str = "/var/ever/db";
 
 #[derive(FromArgs)]
 /// Prepares configs and binaries
@@ -75,6 +76,8 @@ impl CmdInit {
         {
             return Ok(());
         }
+
+        setup_node_db(theme, dirs, &mut node_config)?;
 
         println!("{} Preparing binary", step(1, 2));
 
@@ -517,6 +520,96 @@ async fn setup_adnl(
     }
 
     Ok(true)
+}
+
+fn setup_node_db(
+    theme: &dyn Theme,
+    dirs: &ProjectDirs,
+    node_config: &mut NodeConfig,
+) -> Result<()> {
+    use dialoguer::Completion;
+
+    const DB_PATH_FALLBACK: &str = "node_db";
+
+    struct PathCompletion;
+
+    impl PathCompletion {
+        fn get_directories(&self, path: &dyn AsRef<Path>) -> Vec<String> {
+            match std::fs::read_dir(path) {
+                Ok(entires) => entires
+                    .filter_map(|entry| match entry {
+                        Ok(entry) if entry.metadata().ok()?.is_dir() => {
+                            entry.file_name().into_string().ok()
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+                Err(_) => Vec::new(),
+            }
+        }
+    }
+
+    impl Completion for PathCompletion {
+        fn get(&self, input: &str) -> Option<String> {
+            let with_separator = input.ends_with(std::path::is_separator);
+            let path = PathBuf::from(input);
+
+            match path.metadata() {
+                Ok(metadata) if metadata.is_dir() => {
+                    if with_separator {
+                        let dir = self.get_directories(&path).into_iter().min()?;
+                        return Some(path.join(dir).to_str()?.to_string());
+                    }
+                }
+                Ok(_) => return None,
+                Err(_) => {}
+            }
+
+            let parent = path.parent()?;
+            let name = path.file_name()?.to_str()?;
+
+            let mut entires = self.get_directories(&parent);
+            entires.sort_unstable();
+
+            let mut entires_iter = entires.iter().skip_while(|item| item.as_str() < name);
+            let first_matches = entires_iter.next()?;
+
+            let name = if first_matches == name {
+                entires_iter.chain(entires.first()).next()
+            } else if name.len() < first_matches.len() && first_matches.starts_with(name) {
+                Some(first_matches)
+            } else {
+                None
+            }?;
+
+            Some(parent.join(name).to_str()?.to_string())
+        }
+    }
+
+    if let Some(node_config) = node_config.get_internal_db_path()? {
+        if node_config != PathBuf::from(DB_PATH_FALLBACK) {
+            return Ok(());
+        }
+    }
+
+    let completion = &PathCompletion;
+
+    let path: String = Input::with_theme(theme)
+        .with_prompt("Specify node DB path")
+        .default(DEFAULT_NODE_DB_PATH.to_owned())
+        .completion_with(completion)
+        .validate_with(|input: &String| {
+            let path = PathBuf::from(input);
+            if path.is_absolute() {
+                Ok(())
+            } else {
+                Err("Node DB path must be an absolute")
+            }
+        })
+        .interact_text()?;
+
+    node_config.set_internal_db_path(&path)?;
+    dirs.store_node_config(node_config)
 }
 
 async fn setup_binary(theme: &dyn Theme, dirs: &ProjectDirs) -> Result<bool> {
