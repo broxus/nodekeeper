@@ -42,6 +42,29 @@ impl Subscription {
         subscription
     }
 
+    pub async fn get_account_state(
+        &self,
+        address: &ton_block::MsgAddressInt,
+    ) -> Result<ton_block::ShardAccount> {
+        self.node_tcp_rpc
+            .get_shard_account_state(address)
+            .await
+            .map_err(From::from)
+    }
+
+    pub async fn send_message_with_retires<F>(&self, mut f: F) -> Result<TransactionWithHash>
+    where
+        F: FnMut(u32) -> Result<(ton_block::Message, u32)>,
+    {
+        let timeout = 60;
+        loop {
+            let (message, expire_at) = f(timeout)?;
+            if let Some(tx) = self.send_message(&message, expire_at).await? {
+                break Ok(tx);
+            }
+        }
+    }
+
     pub async fn send_message(
         &self,
         message: &ton_block::Message,

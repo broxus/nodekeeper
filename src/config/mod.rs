@@ -1,4 +1,6 @@
-pub use self::app_config::{AppConfig, AppConfigAdnl, AppConfigControl};
+pub use self::app_config::{
+    AppConfig, AppConfigAdnl, AppConfigControl, AppConfigValidation, DePoolType,
+};
 pub use self::global_config::GlobalConfig;
 pub use self::node_config::{NodeConfig, NodeConfigAdnl, NodeConfigControlServer};
 

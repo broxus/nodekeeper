@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use argh::FromArgs;
 use home::home_dir;
-use once_cell::race::OnceBox;
 
 use crate::config::*;
 use crate::util::*;
@@ -156,9 +155,8 @@ fn default_root_dir() -> &'static PathBuf {
     const ENV: &str = "STEVER_ROOT";
     const DEFAULT_ROOT_DIR: &str = ".stever";
 
-    static DIRS: OnceBox<PathBuf> = OnceBox::new();
-    DIRS.get_or_init(|| {
-        Box::new(if let Ok(path) = std::env::var(ENV) {
+    once!(PathBuf, || {
+        if let Ok(path) = std::env::var(ENV) {
             PathBuf::from(path)
         } else {
             let home_dir = if let Some(uid) = system::get_sudo_uid().unwrap() {
@@ -175,6 +173,6 @@ fn default_root_dir() -> &'static PathBuf {
                     )
                 }
             }
-        })
+        }
     })
 }

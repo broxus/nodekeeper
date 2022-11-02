@@ -3,11 +3,13 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use broxus_util::{const_duration_ms, serde_duration_ms, serde_hex_array};
+use broxus_util::{
+    const_duration_ms, serde_duration_ms, serde_hex_array, serde_string, serde_string_or_number,
+};
 use everscale_crypto::ed25519;
 use serde::{Deserialize, Serialize};
 
-use crate::util::{serde_public_key, serde_secret_key};
+use crate::util::{serde_mc_address, serde_public_key, serde_secret_key};
 
 /// Tool config
 #[derive(Default, Clone, Serialize, Deserialize)]
@@ -17,16 +19,15 @@ pub struct AppConfig {
     pub control: Option<AppConfigControl>,
     /// ADNL config
     pub adnl: Option<AppConfigAdnl>,
+    /// Validation config
+    pub validation: Option<AppConfigValidation>,
 }
 
 impl AppConfig {
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
-        config::Config::builder()
-            .add_source(config::File::from(path.as_ref()))
-            .build()
-            .context("failed to build config")?
-            .try_deserialize()
-            .context("failed to parse config")
+        let file = std::fs::File::open(path).context("failed to open app config")?;
+        let d = &mut serde_json::Deserializer::from_reader(std::io::BufReader::new(file));
+        serde_path_to_error::deserialize(d).context("failed to deserialize app config")
     }
 
     pub fn store<P: AsRef<Path>>(&self, path: P) -> Result<()> {
@@ -91,4 +92,30 @@ pub struct AppConfigAdnl {
     /// Zerostate file hash from the global config
     #[serde(with = "serde_hex_array")]
     pub zerostate_file_hash: [u8; 32],
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "lowercase", tag = "type")]
+pub enum AppConfigValidation {
+    Single {
+        #[serde(with = "serde_mc_address")]
+        address: ton_block::MsgAddressInt,
+        #[serde(with = "serde_string_or_number")]
+        stake: u64,
+    },
+    DePool {
+        #[serde(with = "serde_string")]
+        owner: ton_block::MsgAddressInt,
+        #[serde(with = "serde_string")]
+        depool: ton_block::MsgAddressInt,
+        depool_type: DePoolType,
+    },
+}
+
+#[derive(Copy, Clone, Serialize, Deserialize)]
+pub enum DePoolType {
+    #[serde(rename = "default_v3")]
+    DefaultV3,
+    #[serde(rename = "stever_v1")]
+    StEver,
 }

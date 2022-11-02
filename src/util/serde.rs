@@ -1,6 +1,32 @@
 use everscale_crypto::ed25519;
 use serde::{Deserialize, Deserializer, Serializer};
 
+pub mod serde_mc_address {
+    use broxus_util::serde_string;
+    use ton_block::MsgAddressInt;
+
+    use super::*;
+
+    pub use serde_string::serialize;
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<MsgAddressInt, D::Error> {
+        use serde::de::Error;
+
+        match serde_string::deserialize(deserializer)? {
+            MsgAddressInt::AddrStd(addr) => {
+                if addr.workchain_id as i32 == ton_block::MASTERCHAIN_ID {
+                    Ok(MsgAddressInt::AddrStd(addr))
+                } else {
+                    Err(Error::custom("expected masterchain address"))
+                }
+            }
+            MsgAddressInt::AddrVar(_) => Err(Error::custom("unsupported address")),
+        }
+    }
+}
+
 pub mod serde_public_key {
     use super::*;
 

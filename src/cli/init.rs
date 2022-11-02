@@ -14,6 +14,7 @@ use tokio::process::Command;
 
 use super::{CliContext, ProjectDirs, VALIDATOR_MANAGER_SERVICE, VALIDATOR_SERVICE};
 use crate::config::*;
+use crate::node_tcp_rpc::NodeTcpRpc;
 use crate::util::*;
 
 const DEFAULT_CONTROL_PORT: u16 = 5031;
@@ -37,6 +38,7 @@ impl Cmd {
         match self.subcommand {
             None => CmdInit.run(theme, dirs).await,
             Some(SubCmd::Systemd(cmd)) => cmd.run(theme, dirs).await,
+            Some(SubCmd::Contracts(cmd)) => cmd.run(ctx, theme).await,
         }
     }
 }
@@ -45,6 +47,7 @@ impl Cmd {
 #[argh(subcommand)]
 enum SubCmd {
     Systemd(CmdInitSystemd),
+    Contracts(CmdInitContracts),
 }
 
 struct CmdInit;
@@ -127,6 +130,47 @@ impl CmdInitSystemd {
 
         steps.next("Systemd services are configured now. Great!");
         start_services(theme).await?;
+
+        Ok(())
+    }
+}
+
+#[derive(FromArgs)]
+/// Deploys contracts required for validation
+#[argh(subcommand, name = "contracts")]
+struct CmdInitContracts {}
+
+impl CmdInitContracts {
+    async fn run(self, ctx: CliContext, theme: &dyn Theme) -> Result<()> {
+        let config = ctx.load_config()?;
+        let node_tcp_rpc = NodeTcpRpc::new(config.control()?).await?;
+
+        // check status
+        node_tcp_rpc.get_stats().await?.try_into_running()?;
+
+        if config.validation.is_some()
+            && !confirm(
+                theme,
+                false,
+                "Validator is already configured. Update config?",
+            )?
+        {
+            return Ok(());
+        }
+
+        match Select::with_theme(theme)
+            .with_prompt("Select validator type")
+            .item("Single")
+            .item("DePool")
+            .interact()?
+        {
+            0 => {
+                // single
+            }
+            _ => {
+                // depool
+            }
+        };
 
         Ok(())
     }
