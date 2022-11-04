@@ -14,7 +14,6 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use self::queries_cache::QueriesCache;
-pub use self::queries_cache::QueriesCacheError;
 
 mod queries_cache;
 
@@ -59,7 +58,6 @@ impl TcpAdnl {
         let (tx, rx) = mpsc::unbounded_channel::<Packet>();
 
         let state = Arc::new(SharedState {
-            server_address: config.server_address,
             queries_cache: Arc::new(Default::default()),
             cancellation_token: Default::default(),
             packets_tx: tx,
@@ -112,30 +110,16 @@ impl TcpAdnl {
             return Err(TcpAdnlError::SocketClosed);
         }
 
-        let state = self.state.clone();
-        tokio::spawn(async move {
-            let cancelled = state.cancellation_token.cancelled();
-            if state.cancellation_token.is_cancelled() {
-                return;
+        let answer = tokio::select! {
+            res = tokio::time::timeout(timeout, pending_query.wait()) => {
+                res.ok().flatten()
             }
-
-            tokio::select! {
-                _ = tokio::time::sleep(timeout) => {},
-                _ = cancelled => return,
+            _  = self.state.cancellation_token.cancelled() => {
+                return Err(TcpAdnlError::SocketClosed);
             }
-
-            match state.queries_cache.update_query(query_id, None).await {
-                Ok(true) => tracing::debug!("dropped query"),
-                Err(_) => tracing::debug!("failed to drop query"),
-                _ => {}
-            }
-        });
-
-        let res = tokio::select! {
-            res = pending_query.wait() => res,
-            _ = cancelled => return Err(TcpAdnlError::SocketClosed),
         };
-        Ok(match res.map_err(TcpAdnlError::CacheFailed)? {
+
+        Ok(match answer {
             Some(query) => {
                 Some(tl_proto::deserialize(&query).map_err(TcpAdnlError::InvalidAnswer)?)
             }
@@ -145,7 +129,6 @@ impl TcpAdnl {
 }
 
 struct SharedState {
-    server_address: SocketAddr,
     queries_cache: Arc<QueriesCache>,
     cancellation_token: CancellationToken,
     packets_tx: PacketsTx,
@@ -260,14 +243,7 @@ where
 
         match tl_proto::deserialize::<AdnlMessageAnswer>(&buffer) {
             Ok(AdnlMessageAnswer { query_id, data }) => {
-                match state
-                    .queries_cache
-                    .update_query(*query_id, Some(data))
-                    .await
-                {
-                    Ok(true) => {}
-                    _ => tracing::warn!("failed to resolve query"),
-                }
+                state.queries_cache.update_query(query_id, data);
             }
             Err(e) => tracing::warn!("invalid response: {e:?}"),
         };
@@ -359,8 +335,6 @@ pub enum TcpAdnlError {
     ConnectionError(#[source] std::io::Error),
     #[error("socket closed")]
     SocketClosed,
-    #[error("queries cache failed")]
-    CacheFailed(#[source] QueriesCacheError),
     #[error("invalid answer")]
     InvalidAnswer(#[source] tl_proto::TlError),
 }

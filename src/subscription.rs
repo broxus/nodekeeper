@@ -45,11 +45,19 @@ impl Subscription {
     pub async fn get_account_state(
         &self,
         address: &ton_block::MsgAddressInt,
-    ) -> Result<ton_block::ShardAccount> {
-        self.node_tcp_rpc
+    ) -> Result<Option<ton_block::AccountStuff>> {
+        let state = self
+            .node_tcp_rpc
             .get_shard_account_state(address)
             .await
-            .map_err(From::from)
+            .context("failed to get shard account state")?;
+        match state
+            .read_account()
+            .context("failed to read account state")?
+        {
+            ton_block::Account::Account(state) => Ok(Some(state)),
+            ton_block::Account::AccountNone => Ok(None),
+        }
     }
 
     pub async fn send_message_with_retires<F>(&self, mut f: F) -> Result<TransactionWithHash>

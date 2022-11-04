@@ -22,7 +22,7 @@ pub struct NodeTcpRpc {
 }
 
 impl NodeTcpRpc {
-    pub async fn new(config: &AppConfigControl) -> Result<Self, NodeRpcError> {
+    pub async fn new(config: &AppConfigControl) -> Result<Self> {
         let tcp_adnl = TcpAdnl::connect(TcpAdnlConfig {
             server_address: config.server_address.into(),
             server_pubkey: config.server_pubkey,
@@ -41,29 +41,23 @@ impl NodeTcpRpc {
         })
     }
 
-    pub fn connection(&self) -> &TcpAdnl {
-        &self.tcp_adnl
-    }
-
-    pub async fn generate_key_pair(&self) -> Result<[u8; 32], NodeRpcError> {
+    pub async fn generate_key_pair(&self) -> Result<[u8; 32]> {
         let proto::KeyHash { key_hash } = self.query(proto::GenerateKeyPair).await?;
         Ok(key_hash)
     }
 
-    pub async fn export_public_key(
-        &self,
-        key_hash: &[u8; 32],
-    ) -> Result<ed25519::PublicKey, NodeRpcError> {
+    pub async fn export_public_key(&self, key_hash: &[u8; 32]) -> Result<ed25519::PublicKey> {
         let pubkey: everscale_crypto::tl::PublicKeyOwned =
             self.query(proto::ExportPublicKey { key_hash }).await?;
-        ed25519::PublicKey::from_tl(pubkey.as_equivalent_ref()).ok_or(NodeRpcError::InvalidPubkey)
+        ed25519::PublicKey::from_tl(pubkey.as_equivalent_ref())
+            .ok_or_else(|| NodeRpcError::InvalidPubkey.into())
     }
 
-    pub async fn sign(&self, key_hash: &[u8; 32], data: &[u8]) -> Result<[u8; 64], NodeRpcError> {
+    pub async fn sign(&self, key_hash: &[u8; 32], data: &[u8]) -> Result<[u8; 64]> {
         let proto::Signature { signature } = self.query(proto::Sign { key_hash, data }).await?;
         signature
             .try_into()
-            .map_err(|_| NodeRpcError::InvalidSignature)
+            .map_err(|_| NodeRpcError::InvalidSignature.into())
     }
 
     pub async fn add_validator_permanent_key(
@@ -71,7 +65,7 @@ impl NodeTcpRpc {
         key_hash: &[u8; 32],
         election_date: u32,
         ttl: u32,
-    ) -> Result<(), NodeRpcError> {
+    ) -> Result<()> {
         self.query(proto::AddValidatorPermanentKey {
             key_hash,
             election_date,
@@ -86,7 +80,7 @@ impl NodeTcpRpc {
         permanent_key_hash: &[u8; 32],
         key_hash: &[u8; 32],
         ttl: u32,
-    ) -> Result<(), NodeRpcError> {
+    ) -> Result<()> {
         self.query(proto::AddValidatorAdnlAddress {
             permanent_key_hash,
             key_hash,
@@ -96,18 +90,18 @@ impl NodeTcpRpc {
         .map(expect_success)
     }
 
-    pub async fn get_stats(&self) -> Result<NodeStats, NodeRpcError> {
+    pub async fn get_stats(&self) -> Result<NodeStats> {
         let stats = self.query::<_, proto::Stats>(proto::GetStats).await?;
-        NodeStats::try_from(stats).map_err(NodeRpcError::InvalidStats)
+        NodeStats::try_from(stats).map_err(|e| NodeRpcError::InvalidStats(e).into())
     }
 
-    pub async fn set_states_gc_interval(&self, interval_ms: u32) -> Result<(), NodeRpcError> {
+    pub async fn set_states_gc_interval(&self, interval_ms: u32) -> Result<()> {
         self.query(proto::SetStatesGcInterval { interval_ms })
             .await
             .map(expect_success)
     }
 
-    pub async fn send_message<T: AsRef<[u8]>>(&self, message: T) -> Result<(), NodeRpcError> {
+    pub async fn send_message<T: AsRef<[u8]>>(&self, message: T) -> Result<()> {
         // NOTE: proto::Success is used here on purpose instead of SendMsgStatus
         self.query(proto::SendMessage {
             body: message.as_ref(),
@@ -116,7 +110,7 @@ impl NodeTcpRpc {
         .map(expect_success)
     }
 
-    pub async fn get_config_all(&self) -> Result<ConfigWithId, NodeRpcError> {
+    pub async fn get_config_all(&self) -> Result<ConfigWithId> {
         let proto::ConfigInfo {
             id, config_proof, ..
         } = self
@@ -133,7 +127,7 @@ impl NodeTcpRpc {
         })
     }
 
-    pub async fn get_config_param(&self, param: u32) -> Result<ConfigParamWithId, NodeRpcError> {
+    pub async fn get_config_param(&self, param: u32) -> Result<ConfigParamWithId> {
         let proto::ConfigInfo {
             id, config_proof, ..
         } = self
@@ -153,7 +147,7 @@ impl NodeTcpRpc {
     pub async fn get_shard_account_state(
         &self,
         address: &ton_block::MsgAddressInt,
-    ) -> Result<ton_block::ShardAccount, NodeRpcError> {
+    ) -> Result<ton_block::ShardAccount> {
         let shard_account = self
             .query::<_, proto::ShardAccount>(proto::GetShardAccountState {
                 address: address.to_string().as_bytes(),
@@ -163,13 +157,13 @@ impl NodeTcpRpc {
         match shard_account {
             proto::ShardAccount::State(data) => {
                 ton_block::ShardAccount::construct_from_bytes(&data)
-                    .map_err(|_| NodeRpcError::InvalidAccountState)
+                    .map_err(|_| NodeRpcError::InvalidAccountState.into())
             }
             proto::ShardAccount::Empty => Ok(ton_block::ShardAccount::default()),
         }
     }
 
-    async fn query<Q, R>(&self, query: Q) -> Result<R, NodeRpcError>
+    async fn query<Q, R>(&self, query: Q) -> Result<R>
     where
         Q: TlWrite<Repr = tl_proto::Boxed>,
         for<'a> R: TlRead<'a>,
@@ -183,8 +177,8 @@ impl NodeTcpRpc {
             .await
         {
             Ok(Some(data)) => Ok(data),
-            Ok(None) => Err(NodeRpcError::QueryTimeout),
-            Err(e) => Err(NodeRpcError::QueryFailed(e)),
+            Ok(None) => Err(NodeRpcError::QueryTimeout.into()),
+            Err(e) => Err(NodeRpcError::QueryFailed(e).into()),
         }
     }
 }

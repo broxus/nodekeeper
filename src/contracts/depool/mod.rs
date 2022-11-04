@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use nekoton_abi::{
-    BuildTokenValue, FunctionBuilder, KnownParamType, KnownParamTypePlain, PackAbiPlain,
-    TokenValueExt, UnpackAbi, UnpackAbiPlain,
+    BuildTokenValue, FunctionBuilder, FunctionExt, KnownParamType, KnownParamTypePlain,
+    PackAbiPlain, TokenValueExt, UnpackAbi, UnpackAbiPlain, UnpackFirst,
 };
 use nekoton_utils::SimpleClock;
 use ton_abi::contract::ABI_VERSION_2_2;
@@ -114,21 +114,67 @@ impl DePool {
         ))
     }
 
+    pub fn set_allowed_participant(
+        &self,
+        address: ton_block::MsgAddressInt,
+    ) -> Result<InternalMessage> {
+        self.ensure_stever()?;
+        Ok(self.internal_message_to_self(
+            ONE_EVER,
+            stever_v1::set_allowed_participant()
+                .encode_internal_input(&[address.token_value().named("addr")])?,
+        ))
+    }
+
     pub async fn get_info(&self) -> Result<common::DePoolInfo> {
-        use nekoton_abi::FunctionExt;
-
-        let state = self.subscription.get_account_state(&self.address).await?;
-        let account = match state.read_account()? {
-            ton_block::Account::Account(account) => account,
-            ton_block::Account::AccountNone => anyhow::bail!("not deployed"),
-        };
-
-        let info = common::get_depool_info()
-            .run_local(&SimpleClock, account, &[])?
-            .tokens
-            .context("no outputs")?
+        let info = self
+            .run_local(common::get_depool_info(), &[])
+            .await?
             .unpack()?;
         Ok(info)
+    }
+
+    pub async fn get_rounds(&self) -> Result<common::RoundsMap> {
+        let rounds = self
+            .run_local(common::get_rounds(), &[])
+            .await?
+            .unpack_first()?;
+        Ok(rounds)
+    }
+
+    pub async fn get_allowed_participants(&self) -> Result<Vec<ton_block::MsgAddressInt>> {
+        self.ensure_stever()?;
+        let addresses: stever_v1::ParticipantsMap = self
+            .run_local(stever_v1::allowed_participants(), &[])
+            .await?
+            .unpack_first()?;
+        Ok(addresses.into_keys().collect())
+    }
+
+    async fn run_local(
+        &self,
+        function: &ton_abi::Function,
+        inputs: &[ton_abi::Token],
+    ) -> Result<Vec<ton_abi::Token>> {
+        let account = self.get_state().await?;
+        function
+            .run_local(&SimpleClock, account, inputs)?
+            .tokens
+            .context("no outputs")
+    }
+
+    async fn get_state(&self) -> Result<ton_block::AccountStuff> {
+        self.subscription
+            .get_account_state(&self.address)
+            .await?
+            .context("DePool not deployed")
+    }
+
+    fn ensure_stever(&self) -> Result<()> {
+        match self.ty {
+            DePoolType::DefaultV3 => anyhow::bail!("expected StEver depool"),
+            DePoolType::StEver => Ok(()),
+        }
     }
 
     fn external_message_to_self<T>(&self, body: T) -> ton_block::Message
@@ -363,7 +409,7 @@ mod common {
         NoValidatorRequest = 8,
     }
 
-    #[derive(UnpackAbiPlain, KnownParamType)]
+    #[derive(UnpackAbi, KnownParamType)]
     pub struct Round {
         #[abi(uint64)]
         pub id: u64,
