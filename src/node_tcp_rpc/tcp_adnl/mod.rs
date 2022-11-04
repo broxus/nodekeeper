@@ -114,9 +114,7 @@ impl TcpAdnl {
             res = tokio::time::timeout(timeout, pending_query.wait()) => {
                 res.ok().flatten()
             }
-            _  = self.state.cancellation_token.cancelled() => {
-                return Err(TcpAdnlError::SocketClosed);
-            }
+            _  = cancelled => return Err(TcpAdnlError::SocketClosed),
         };
 
         Ok(match answer {

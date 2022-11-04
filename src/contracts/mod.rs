@@ -1,4 +1,5 @@
 pub mod depool;
+pub mod wallet;
 
 #[derive(Clone)]
 pub struct InternalMessage {
