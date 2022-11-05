@@ -38,6 +38,16 @@ impl AppConfig {
     pub fn control(&self) -> Result<&AppConfigControl> {
         self.control.as_ref().context("control config is empty")
     }
+
+    pub fn adnl(&self) -> Result<&AppConfigAdnl> {
+        self.adnl.as_ref().context("adnl config is empty")
+    }
+
+    pub fn validation(&self) -> Result<&AppConfigValidation> {
+        self.validation
+            .as_ref()
+            .context("validation config is empty")
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -82,6 +92,9 @@ impl AppConfigControl {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppConfigAdnl {
+    /// Local ADNL port
+    pub client_port: u16,
+
     /// Server ADNL address
     pub server_address: SocketAddrV4,
 

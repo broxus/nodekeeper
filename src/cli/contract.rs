@@ -221,16 +221,19 @@ struct CmdSend {
     /// base64 encoded state init
     #[argh(option, short = 'i')]
     state_init: Option<String>,
-
-    /// path to the global config
-    #[argh(option, short = 'g')]
-    global_config: String,
 }
 
 impl CmdSend {
     async fn run(self, config: AppConfig) -> Result<serde_json::Value> {
-        let node_tcp_rpc = NodeTcpRpc::new(config.control()?).await?;
+        // Prepare RPC clients
+        let node_tcp_rpc = NodeTcpRpc::new(config.control()?)
+            .await
+            .context("failed to build node TCP client")?;
+        let node_udp_rpc = NodeUdpRpc::new(config.adnl()?)
+            .await
+            .context("failed to build node UDP client")?;
 
+        // Parse arguments
         let address = parse_address(&self.address)?;
 
         let abi = parse_contract_abi(&self.abi)?;
@@ -243,6 +246,7 @@ impl CmdSend {
         let keys = parse_keys(self.sign)?;
         let state_init = parse_optional_state_init(self.state_init)?;
 
+        // Prepare external message
         let (expire_at, headers) =
             make_default_headers(keys.as_ref().map(|keypair| keypair.public), self.timeout);
 
@@ -266,25 +270,13 @@ impl CmdSend {
             message.set_state_init(state_init);
         }
 
-        let global_config =
-            GlobalConfig::load(&self.global_config).context("failed to load global config")?;
+        // Check whether the node is running
+        let stats = node_tcp_rpc.get_stats().await?.try_into_running()?;
 
-        let stats = match node_tcp_rpc.get_stats().await? {
-            NodeStats::Running(stats) => stats,
-            NodeStats::NotReady => anyhow::bail!("node is not ready"),
-        };
-
-        let zerostate_file_hash = global_config.zero_state.file_hash;
-
-        let node_udp_rpc = NodeUdpRpc::new_uninit(30000).await?;
-        let peer = node_udp_rpc
-            .resolve_peer(global_config, stats.overlay_adnl_id.into())
-            .await?;
-        let node_udp_rpc = node_udp_rpc
-            .initialize(peer, zerostate_file_hash.as_slice())
-            .await?;
-
+        // Create subscription
         let subscription = Subscription::new(node_tcp_rpc, node_udp_rpc);
+
+        // Send external message and wait until it is delivered
         let TransactionWithHash {
             hash: tx_hash,
             data: tx,
@@ -293,6 +285,7 @@ impl CmdSend {
             .await?
             .context("message expired")?;
 
+        // Parse transaction
         let msg_hash = tx
             .in_msg
             .context("external inbound message not found")?
@@ -316,6 +309,7 @@ impl CmdSend {
             serde_json::Value::Object(Default::default())
         };
 
+        // Done
         Ok(serde_json::json!({
             "tx_hash": tx_hash.to_hex_string(),
             "msg_hash": msg_hash.to_hex_string(),

@@ -15,9 +15,11 @@ use tokio::process::Command;
 use super::{CliContext, ProjectDirs, VALIDATOR_MANAGER_SERVICE, VALIDATOR_SERVICE};
 use crate::config::*;
 use crate::node_tcp_rpc::NodeTcpRpc;
+use crate::node_udp_rpc::NodeUdpRpc;
 use crate::util::*;
 
 const DEFAULT_CONTROL_PORT: u16 = 5031;
+const DEFAULT_LOCAL_ADNL_PORT: u16 = 5032;
 const DEFAULT_ADNL_PORT: u16 = 30100;
 const DEFAULT_NODE_REPO: &str = "https://github.com/tonlabs/ton-labs-node.git";
 const DEFAULT_NODE_DB_PATH: &str = "/var/ever/db";
@@ -143,7 +145,12 @@ struct CmdInitContracts {}
 impl CmdInitContracts {
     async fn run(self, ctx: CliContext, theme: &dyn Theme) -> Result<()> {
         let config = ctx.load_config()?;
-        let node_tcp_rpc = NodeTcpRpc::new(config.control()?).await?;
+        let node_tcp_rpc = NodeTcpRpc::new(config.control()?)
+            .await
+            .context("failed to create node TCP client")?;
+        let node_udp_rpc = NodeUdpRpc::new(config.adnl()?)
+            .await
+            .context("failed to create node UDP client")?;
 
         // check status
         node_tcp_rpc.get_stats().await?.try_into_running()?;
@@ -486,6 +493,7 @@ async fn setup_adnl(
         }
         (None, Some(adnl_node)) => {
             app_config.adnl = Some(AppConfigAdnl {
+                client_port: DEFAULT_LOCAL_ADNL_PORT,
                 server_address: adnl_node.ip_address,
                 server_pubkey: adnl_node.overlay_pubkey()?,
                 zerostate_file_hash,
@@ -504,7 +512,7 @@ async fn setup_adnl(
             };
 
             let adnl_port = Input::with_theme(theme)
-                .with_prompt("Specify ADNL port")
+                .with_prompt("Specify server ADNL port")
                 .with_initial_text(adnl_port.to_string())
                 .interact()?;
 
@@ -515,6 +523,7 @@ async fn setup_adnl(
             node_config.set_adnl_node(&adnl_node)?;
 
             app_config.adnl = Some(AppConfigAdnl {
+                client_port: DEFAULT_LOCAL_ADNL_PORT,
                 server_address: adnl_node.ip_address,
                 server_pubkey: adnl_node.overlay_pubkey()?,
                 zerostate_file_hash,

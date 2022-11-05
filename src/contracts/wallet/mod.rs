@@ -109,7 +109,7 @@ pub struct Gift {
 
 const BALANCE_OFFSET: u64 = ONE_EVER / 5;
 
-fn compute_wallet_address(
+pub fn compute_wallet_address(
     workchain_id: i8,
     pubkey: &ed25519_dalek::PublicKey,
 ) -> Result<ton_block::MsgAddressInt> {

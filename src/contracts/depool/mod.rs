@@ -203,7 +203,7 @@ impl DePool {
 }
 
 impl DePoolType {
-    fn compute_depool_address(
+    pub fn compute_depool_address(
         &self,
         pubkey: &ed25519_dalek::PublicKey,
     ) -> Result<ton_block::MsgAddressInt> {
