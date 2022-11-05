@@ -135,7 +135,7 @@ impl Subscription {
                     tracing::warn!("pending messages entry not found");
                 }
             };
-            return Err(e.into());
+            return Err(e);
         }
 
         // Wait for the message execution

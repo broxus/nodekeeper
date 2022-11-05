@@ -271,7 +271,7 @@ impl CmdSend {
         }
 
         // Check whether the node is running
-        let stats = node_tcp_rpc.get_stats().await?.try_into_running()?;
+        node_tcp_rpc.get_stats().await?.try_into_running()?;
 
         // Create subscription
         let subscription = Subscription::new(node_tcp_rpc, node_udp_rpc);
@@ -328,14 +328,12 @@ fn parse_message<'a, 'b: 'a>(
         return Ok(None);
     }
 
-    let mut body = match msg.body() {
-        Some(body) => body,
-        None => return Ok(None),
+    let Some(mut body) = msg.body() else {
+        return Ok(None)
     };
 
-    let function_id = match body.get_next_u32() {
-        Ok(id) => id,
-        Err(_) => return Ok(None),
+    let Ok(function_id) = body.get_next_u32() else {
+        return Ok(None);
     };
 
     if function_id == method.output_id {
@@ -343,9 +341,8 @@ fn parse_message<'a, 'b: 'a>(
             ton_abi::TokenValue::decode_params(&method.outputs, body, &method.abi_version, false)?;
         Ok(Some(ParsedData::Output(output)))
     } else {
-        let event = match abi.events.values().find(|event| event.id == function_id) {
-            Some(event) => event,
-            None => return Ok(None),
+        let Some(event) = abi.events.values().find(|event| event.id == function_id) else {
+            return Ok(None);
         };
 
         let data =

@@ -3,6 +3,7 @@ use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use argh::FromArgs;
@@ -14,8 +15,10 @@ use tokio::process::Command;
 
 use super::{CliContext, ProjectDirs, VALIDATOR_MANAGER_SERVICE, VALIDATOR_SERVICE};
 use crate::config::*;
+use crate::crypto;
 use crate::node_tcp_rpc::NodeTcpRpc;
 use crate::node_udp_rpc::NodeUdpRpc;
+use crate::subscription::Subscription;
 use crate::util::*;
 
 const DEFAULT_CONTROL_PORT: u16 = 5031;
@@ -23,6 +26,9 @@ const DEFAULT_LOCAL_ADNL_PORT: u16 = 5032;
 const DEFAULT_ADNL_PORT: u16 = 30100;
 const DEFAULT_NODE_REPO: &str = "https://github.com/tonlabs/ton-labs-node.git";
 const DEFAULT_NODE_DB_PATH: &str = "/var/ever/db";
+
+const MNEMONIC_TYPE: crypto::MnemonicType = crypto::MnemonicType::Bip39;
+const DERIVATION_PATH: &str = crypto::DEFAULT_PATH;
 
 #[derive(FromArgs)]
 /// Prepares configs and binaries
@@ -145,16 +151,9 @@ struct CmdInitContracts {}
 impl CmdInitContracts {
     async fn run(self, ctx: CliContext, theme: &dyn Theme) -> Result<()> {
         let config = ctx.load_config()?;
-        let node_tcp_rpc = NodeTcpRpc::new(config.control()?)
-            .await
-            .context("failed to create node TCP client")?;
-        let node_udp_rpc = NodeUdpRpc::new(config.adnl()?)
-            .await
-            .context("failed to create node UDP client")?;
+        let dirs = ctx.dirs();
 
-        // check status
-        node_tcp_rpc.get_stats().await?.try_into_running()?;
-
+        // Check whether validation was already configured
         if config.validation.is_some()
             && !confirm(
                 theme,
@@ -165,22 +164,104 @@ impl CmdInitContracts {
             return Ok(());
         }
 
+        // Create RPC clients
+        let node_tcp_rpc = NodeTcpRpc::new(config.control()?)
+            .await
+            .context("failed to create node TCP client")?;
+        let node_udp_rpc = NodeUdpRpc::new(config.adnl()?)
+            .await
+            .context("failed to create node UDP client")?;
+
+        // Check node status
+        node_tcp_rpc.get_stats().await?.try_into_running()?;
+
+        // Create subscription
+        let subscription = Subscription::new(node_tcp_rpc, node_udp_rpc);
+
         match Select::with_theme(theme)
             .with_prompt("Select validator type")
             .item("Single")
             .item("DePool")
             .interact()?
         {
-            0 => {
-                // single
-            }
-            _ => {
-                // depool
-            }
-        };
-
-        Ok(())
+            0 => prepare_single_validator(theme, dirs, subscription).await,
+            _ => prepare_depool_validator(theme, dirs, subscription).await,
+        }
     }
+}
+
+async fn prepare_single_validator(
+    theme: &dyn Theme,
+    dirs: &ProjectDirs,
+    subscrioption: Arc<Subscription>,
+) -> Result<()> {
+    use crate::contracts::*;
+
+    let mut steps = Steps::new(3);
+
+    steps.next("Creating validator wallet");
+    let keypair = prepare_seed(theme)?;
+
+    let wallet = wallet::Wallet::new(-1, keypair, subscrioption)
+        .context("failed to create validator wallet")?;
+
+    println!("Validator wallet address:\n{}", wallet.address());
+
+    println!("Fetching balance...");
+    let balance = wallet
+        .get_balance()
+        .await
+        .context("failed to fetch validator wallet balance")?;
+
+    match balance {
+        None => {
+            println!("Refill validator balance...");
+            todo!()
+        }
+        Some(balance) => {
+            println!("Wallet balance: {balance}");
+        }
+    }
+
+    // TODO
+    Ok(())
+}
+
+async fn prepare_depool_validator(
+    theme: &dyn Theme,
+    dirs: &ProjectDirs,
+    subscrioption: Arc<Subscription>,
+) -> Result<()> {
+    todo!()
+}
+
+fn prepare_seed(theme: &dyn Theme) -> Result<ed25519_dalek::Keypair> {
+    fn derive(phrase: &dyn AsRef<str>) -> Result<ed25519_dalek::Keypair> {
+        crypto::derive_from_phrase(phrase.as_ref(), MNEMONIC_TYPE, DERIVATION_PATH)
+    }
+
+    let seed = match Select::with_theme(theme)
+        .item("Generate new seed")
+        .item("Import seed")
+        .interact()?
+    {
+        0 => {
+            let seed = crypto::generate_seed(MNEMONIC_TYPE);
+            println!(
+                "Your new seed phrase:\n\n{seed}\n\n{}",
+                style("Make sure you make a backup").yellow().bold()
+            );
+            seed
+        }
+        _ => Input::with_theme(theme)
+            .with_prompt("Seed phrase")
+            .validate_with(|input: &String| match derive(input) {
+                Ok(_) => Ok(()),
+                Err(e) => Err(e.to_string()),
+            })
+            .interact_text()?,
+    };
+    derive(&seed)
 }
 
 fn prepare_root_dir(theme: &dyn Theme, dirs: &ProjectDirs) -> Result<bool> {
@@ -792,7 +873,7 @@ impl ProjectDirs {
     pub async fn install_node_from_repo(&self, repo: &Url) -> Result<()> {
         let git_dir = self.git_cache_dir();
         if !git_dir.exists() {
-            std::fs::create_dir_all(&git_dir).context("failed to create git cache directory")?;
+            std::fs::create_dir_all(git_dir).context("failed to create git cache directory")?;
         }
 
         let repo_dir = git_dir.join("ton-labs-node");

@@ -25,9 +25,8 @@ pub struct AppConfig {
 
 impl AppConfig {
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let file = std::fs::File::open(path).context("failed to open app config")?;
-        let d = &mut serde_json::Deserializer::from_reader(std::io::BufReader::new(file));
-        serde_path_to_error::deserialize(d).context("failed to deserialize app config")
+        let content = std::fs::read_to_string(path).context("failed to read app config")?;
+        toml::from_str(&content).context("failed to deserialize app config")
     }
 
     pub fn store<P: AsRef<Path>>(&self, path: P) -> Result<()> {

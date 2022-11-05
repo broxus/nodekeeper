@@ -30,6 +30,10 @@ impl Wallet {
         })
     }
 
+    pub fn address(&self) -> &ton_block::MsgAddressInt {
+        &self.address
+    }
+
     pub async fn get_balance(&self) -> Result<Option<u128>> {
         let account = self.get_account_state().await?;
         Ok(account.map(|state| state.storage.balance.grams.0))

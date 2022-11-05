@@ -45,8 +45,8 @@ pub fn derive_from_phrase(
     }
 }
 
-/// Generates mnemonic and keypair.
-pub fn generate_key(account_type: MnemonicType) -> String {
+/// Generates seed phrase
+pub fn generate_seed(mnemonic_type: MnemonicType) -> String {
     use ::bip39::util::{Bits11, IterExt};
 
     let rng = &mut rand::thread_rng();
@@ -64,7 +64,7 @@ pub fn generate_key(account_type: MnemonicType) -> String {
             .collect()
     }
 
-    match account_type {
+    match mnemonic_type {
         MnemonicType::Legacy => {
             let entropy: [u8; 32] = rng.gen();
             generate_words(&entropy)

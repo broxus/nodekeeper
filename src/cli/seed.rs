@@ -41,7 +41,7 @@ struct CmdGenerate {
 
 impl CmdGenerate {
     fn run(self) -> Result<()> {
-        let seed = crypto::generate_key(self.ty);
+        let seed = crypto::generate_seed(self.ty);
         print_output(seed);
         Ok(())
     }

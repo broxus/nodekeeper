@@ -92,9 +92,8 @@ pub fn parse_keys(keys: Option<PathBuf>) -> Result<Option<ed25519_dalek::Keypair
         secret: [u8; 32],
     }
 
-    let path = match keys {
-        Some(path) => path,
-        None => return Ok(None),
+    let Some(path) = keys else {
+        return Ok(None);
     };
 
     let keypair = std::fs::read_to_string(path).context("failed to read keys")?;
