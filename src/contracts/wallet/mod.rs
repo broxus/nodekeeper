@@ -165,9 +165,9 @@ mod ever_wallet {
         once!(ton_abi::Function, || {
             FunctionBuilder::new("sendTransaction")
                 .abi_version(ABI_VERSION_2_3)
+                .pubkey_header()
                 .time_header()
                 .expire_header()
-                .pubkey_header()
                 .inputs(SendTransactionInputs::param_type())
                 .build()
         })

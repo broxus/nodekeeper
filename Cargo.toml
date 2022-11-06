@@ -61,6 +61,7 @@ tiny-hderive = { git = "https://github.com/broxus/tiny-hderive.git" }
 ton_abi = { git = "https://github.com/broxus/ton-labs-abi.git" }
 ton_block = { git = "https://github.com/broxus/ton-labs-block.git" }
 ton_types = { git = "https://github.com/broxus/ton-labs-types.git" }
+ton_executor = { git = "https://github.com/broxus/ton-labs-executor.git" }
 
 nekoton-abi = { git = "https://github.com/broxus/nekoton.git", features = ["derive"] }
 nekoton-utils = { git = "https://github.com/broxus/nekoton.git" }

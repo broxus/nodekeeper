@@ -15,6 +15,14 @@ use crate::config::DePoolType;
 use crate::subscription::Subscription;
 use crate::util::make_default_headers;
 
+#[derive(Debug, Clone)]
+pub struct DePoolInitParams {
+    pub min_stake: u64,
+    pub validator_assurance: u64,
+    pub owner: ton_block::MsgAddressInt,
+    pub participant_reward_fraction: u8,
+}
+
 pub struct DePool {
     ty: DePoolType,
     keypair: ed25519_dalek::Keypair,
@@ -38,8 +46,35 @@ impl DePool {
         })
     }
 
-    pub async fn deploy(&self, inputs: common::ConstructorInputs) -> Result<()> {
-        let inputs = inputs.pack();
+    pub fn address(&self) -> &ton_block::MsgAddressInt {
+        &self.address
+    }
+
+    pub async fn is_deployed(&self) -> Result<bool> {
+        let Some(account) = self
+            .subscription
+            .get_account_state(&self.address)
+            .await
+            .context("failed to get DePool state")? else {
+            return Ok(false)
+        };
+
+        match account.storage.state {
+            ton_block::AccountState::AccountActive { .. } => Ok(true),
+            ton_block::AccountState::AccountFrozen { .. } => anyhow::bail!("account frozen"),
+            ton_block::AccountState::AccountUninit => Ok(false),
+        }
+    }
+
+    pub async fn deploy(&self, params: DePoolInitParams) -> Result<()> {
+        let inputs = common::ConstructorInputs {
+            min_stake: params.min_stake,
+            validator_assurance: params.validator_assurance,
+            validator_wallet: params.owner,
+            proxy_code: self.ty.proxy_code().clone(),
+            participant_reward_fraction: params.participant_reward_fraction,
+        }
+        .pack();
 
         self.subscription
             .send_message_with_retires(move |timeout| {

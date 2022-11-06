@@ -1846,6 +1846,7 @@ dependencies = [
  "toml",
  "ton_abi",
  "ton_block",
+ "ton_executor",
  "ton_types",
  "tracing",
  "tracing-subscriber",
