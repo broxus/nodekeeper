@@ -1824,6 +1824,7 @@ dependencies = [
  "libc",
  "nekoton-abi",
  "nekoton-utils",
+ "num",
  "once_cell",
  "parking_lot",
  "pbkdf2",

@@ -111,7 +111,7 @@ pub struct Gift {
     pub payload: ton_types::Cell,
 }
 
-const BALANCE_OFFSET: u64 = ONE_EVER / 5;
+const BALANCE_OFFSET: u128 = ONE_EVER / 5;
 
 pub fn compute_wallet_address(
     workchain_id: i8,

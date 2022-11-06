@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::future::Future;
 use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::{Path, PathBuf};
@@ -26,6 +27,7 @@ const DEFAULT_LOCAL_ADNL_PORT: u16 = 5032;
 const DEFAULT_ADNL_PORT: u16 = 30100;
 const DEFAULT_NODE_REPO: &str = "https://github.com/tonlabs/ton-labs-node.git";
 const DEFAULT_NODE_DB_PATH: &str = "/var/ever/db";
+const DEFAULT_STAKE_FACTOR: f64 = 3.0;
 
 const MNEMONIC_TYPE: crypto::MnemonicType = crypto::MnemonicType::Bip39;
 const DERIVATION_PATH: &str = crypto::DEFAULT_PATH;
@@ -150,7 +152,7 @@ struct CmdInitContracts {}
 
 impl CmdInitContracts {
     async fn run(self, ctx: CliContext, theme: &dyn Theme) -> Result<()> {
-        let config = ctx.load_config()?;
+        let mut config = ctx.load_config()?;
         let dirs = ctx.dirs();
 
         // Check whether validation was already configured
@@ -182,9 +184,10 @@ impl CmdInitContracts {
             .with_prompt("Select validator type")
             .item("Single")
             .item("DePool")
+            .default(0)
             .interact()?
         {
-            0 => prepare_single_validator(theme, dirs, subscription).await,
+            0 => prepare_single_validator(theme, dirs, &mut config, subscription).await,
             _ => prepare_depool_validator(theme, dirs, subscription).await,
         }
     }
@@ -193,37 +196,87 @@ impl CmdInitContracts {
 async fn prepare_single_validator(
     theme: &dyn Theme,
     dirs: &ProjectDirs,
+    app_config: &mut AppConfig,
     subscrioption: Arc<Subscription>,
 ) -> Result<()> {
     use crate::contracts::*;
 
+    fn to_factor_repr(factor: f64) -> u32 {
+        (factor * 65536.0) as u32
+    }
+
+    fn from_factor_repr(factor: u32) -> f64 {
+        factor as f64 / 65536.0
+    }
+
     let mut steps = Steps::new(3);
+
+    let stakes_config = subscrioption
+        .get_blockchain_config()
+        .await
+        .context("failed to get blockchain config")?
+        .stakes_config()
+        .context("failed to get stakes config")?;
+    let min_stake = num::integer::div_ceil(stakes_config.min_stake.0, ONE_EVER);
+    let max_stake = num::integer::div_floor(stakes_config.max_stake.0, ONE_EVER);
+    let max_stake_factor = stakes_config.max_stake_factor;
 
     steps.next("Creating validator wallet");
     let keypair = prepare_seed(theme)?;
 
     let wallet = wallet::Wallet::new(-1, keypair, subscrioption)
+        .map(Arc::new)
         .context("failed to create validator wallet")?;
 
-    println!("Validator wallet address:\n{}", wallet.address());
+    println!(
+        "Validator wallet address:\n\n{}\n",
+        style(wallet.address()).bold()
+    );
 
-    println!("Fetching balance...");
-    let balance = wallet
-        .get_balance()
-        .await
-        .context("failed to fetch validator wallet balance")?;
+    steps.next("Configuring the stake");
 
-    match balance {
-        None => {
-            println!("Refill validator balance...");
-            todo!()
-        }
-        Some(balance) => {
-            println!("Wallet balance: {balance}");
-        }
-    }
+    let stake_per_round: u64 = Input::with_theme(theme)
+        .with_prompt("Stake per round")
+        .validate_with(|stake: &u64| match *stake as u128 {
+            x if x > max_stake => Err(format!("Too big stake (max stake is {max_stake} EVER)")),
+            x if x < min_stake => Err(format!("Too small stake (min stake is {min_stake} EVER)")),
+            _ => Ok(()),
+        })
+        .interact_text()?;
+    let stake_per_round = stake_per_round.saturating_mul(ONE_EVER as u64);
 
-    // TODO
+    let stake_factor: f64 = Input::with_theme(theme)
+        .with_prompt("Stake factor")
+        .with_initial_text(DEFAULT_STAKE_FACTOR.to_string())
+        .validate_with(|factor: &f64| match to_factor_repr(*factor) {
+            x if x > max_stake_factor => Err(format!(
+                "Too big stake factor (max is {})",
+                from_factor_repr(max_stake_factor)
+            )),
+            x if x < to_factor_repr(1.0) => Err("Too small stake factor (min is 1.0)".to_owned()),
+            _ => Ok::<_, String>(()),
+        })
+        .interact_text()?;
+    let stake_factor = std::cmp::min(to_factor_repr(stake_factor), max_stake_factor);
+
+    app_config.validation = Some(AppConfigValidation::Single {
+        address: wallet.address().clone(),
+        stake_per_round,
+        stake_factor,
+    });
+    dirs.store_app_config(app_config)?;
+
+    steps.next("Replenishing the balance");
+
+    let balance = wait_for_balance(
+        "Waiting for the initial balance",
+        stake_per_round as u128 * 2 + 10 * ONE_EVER,
+        || async { wallet.get_balance().await },
+    )
+    .await?;
+    println!("Validator wallet balance: {}", Ever(balance));
+
+    steps.next("Validator configured successfully. Great!");
     Ok(())
 }
 
@@ -235,6 +288,29 @@ async fn prepare_depool_validator(
     todo!()
 }
 
+async fn wait_for_balance<T, F>(prompt: T, target: u128, mut f: impl FnMut() -> F) -> Result<u128>
+where
+    T: std::fmt::Display,
+    F: Future<Output = Result<Option<u128>>>,
+{
+    let spinner = Spinner::start(format!("{prompt}: fetching balance..."));
+    let interval = std::time::Duration::from_secs(1);
+    loop {
+        match f().await? {
+            Some(balance) if balance >= target => break Ok(balance),
+            Some(balance) => spinner.set_message(format!(
+                "{prompt}: account balance is not enough {}",
+                note(format!("{} / {} EVER", Ever(balance), Ever(target)))
+            )),
+            None => spinner.set_message(format!(
+                "{prompt}: account does not exist yet {}",
+                note(format!("0 / {} EVER", Ever(target)))
+            )),
+        }
+        tokio::time::sleep(interval).await;
+    }
+}
+
 fn prepare_seed(theme: &dyn Theme) -> Result<ed25519_dalek::Keypair> {
     fn derive(phrase: &dyn AsRef<str>) -> Result<ed25519_dalek::Keypair> {
         crypto::derive_from_phrase(phrase.as_ref(), MNEMONIC_TYPE, DERIVATION_PATH)
@@ -243,13 +319,15 @@ fn prepare_seed(theme: &dyn Theme) -> Result<ed25519_dalek::Keypair> {
     let seed = match Select::with_theme(theme)
         .item("Generate new seed")
         .item("Import seed")
+        .default(0)
         .interact()?
     {
         0 => {
             let seed = crypto::generate_seed(MNEMONIC_TYPE);
             println!(
-                "Your new seed phrase:\n\n{seed}\n\n{}",
-                style("Make sure you make a backup").yellow().bold()
+                "\nYour new seed phrase:\n\n{}\n\n{}\n",
+                style(seed.as_str()).bold(),
+                style("Please backup this seed phrase!").yellow().bold()
             );
             seed
         }

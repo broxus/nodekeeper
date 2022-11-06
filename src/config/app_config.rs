@@ -113,7 +113,8 @@ pub enum AppConfigValidation {
         #[serde(with = "serde_mc_address")]
         address: ton_block::MsgAddressInt,
         #[serde(with = "serde_string_or_number")]
-        stake: u64,
+        stake_per_round: u64,
+        stake_factor: u32,
     },
     DePool {
         #[serde(with = "serde_string")]

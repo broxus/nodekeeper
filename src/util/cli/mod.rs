@@ -7,7 +7,28 @@ use broxus_util::serde_hex_array;
 use serde::Deserialize;
 use ton_block::Deserializable;
 
+pub use self::spinner::Spinner;
+
 mod spinner;
+
+pub struct Ever<T>(pub T);
+
+impl<T: Into<u128> + Copy> std::fmt::Display for Ever<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let num: u128 = self.0.into();
+        let int = num / 1000000000;
+        let mut frac = num % 1000000000;
+
+        int.fmt(f)?;
+        if frac > 0 {
+            while frac % 10 == 0 && frac > 0 {
+                frac /= 10;
+            }
+            f.write_fmt(format_args!(".{frac}"))?;
+        }
+        Ok(())
+    }
+}
 
 pub fn print_output<T: std::fmt::Display>(arg: T) {
     if console::user_attended() {

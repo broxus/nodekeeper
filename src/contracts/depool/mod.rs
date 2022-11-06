@@ -98,7 +98,7 @@ impl DePool {
 
     pub fn add_ordinary_stake(&self, amount: u64) -> Result<InternalMessage> {
         Ok(self.internal_message_to_self(
-            amount + ONE_EVER / 2,
+            (amount as u128) + ONE_EVER / 2,
             &common::add_ordinary_stake()
                 .encode_internal_input(&[amount.token_value().named("stake")])?,
         ))
@@ -190,7 +190,7 @@ impl DePool {
         message
     }
 
-    fn internal_message_to_self<T>(&self, amount: u64, payload: T) -> InternalMessage
+    fn internal_message_to_self<T>(&self, amount: u128, payload: T) -> InternalMessage
     where
         T: Into<ton_types::Cell>,
     {
