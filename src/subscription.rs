@@ -5,7 +5,7 @@ use std::sync::{Arc, Weak};
 use anyhow::{Context, Result};
 use arc_swap::ArcSwapOption;
 use rustc_hash::FxHashMap;
-use tokio::sync::{oneshot, Notify};
+use tokio::sync::{mpsc, oneshot, Notify};
 use ton_block::{Deserializable, Serializable};
 
 use crate::node_tcp_rpc::NodeTcpRpc;
@@ -16,14 +16,11 @@ pub struct Subscription {
     node_tcp_rpc: NodeTcpRpc,
     node_udp_rpc: NodeUdpRpc,
     last_mc_block: ArcSwapOption<StoredMcBlock>,
-    pending_message_count: AtomicUsize,
-    pending_messages_changed: Arc<Notify>,
-    mc_pending_messages: PendingMessages,
-    sc_pending_messages: PendingMessages,
+    subscription_count: AtomicUsize,
+    subscriptions_changed: Arc<Notify>,
+    mc_subscriptions: AccountSubscriptions,
+    sc_subscriptions: AccountSubscriptions,
 }
-
-type PendingMessages = FxDashMap<ton_types::UInt256, AccountPendingMessages>;
-type AccountPendingMessages = FxHashMap<ton_types::UInt256, PendingMessage>;
 
 impl Subscription {
     pub fn new(node_tcp_rpc: NodeTcpRpc, node_udp_rpc: NodeUdpRpc) -> Arc<Self> {
@@ -31,10 +28,10 @@ impl Subscription {
             node_tcp_rpc,
             node_udp_rpc,
             last_mc_block: Default::default(),
-            pending_message_count: Default::default(),
-            pending_messages_changed: Default::default(),
-            mc_pending_messages: Default::default(),
-            sc_pending_messages: Default::default(),
+            subscription_count: Default::default(),
+            subscriptions_changed: Default::default(),
+            mc_subscriptions: Default::default(),
+            sc_subscriptions: Default::default(),
         });
 
         tokio::spawn(walk_blocks(Arc::downgrade(&subscription)));
@@ -95,17 +92,17 @@ impl Subscription {
         let data = ton_types::serialize_toc(&message_cell)?;
 
         // Find pending messages map
-        let pending_messages = match workchain {
-            ton_block::MASTERCHAIN_ID => &self.mc_pending_messages,
-            ton_block::BASE_WORKCHAIN_ID => &self.sc_pending_messages,
+        let subscriptions = match workchain {
+            ton_block::MASTERCHAIN_ID => &self.mc_subscriptions,
+            ton_block::BASE_WORKCHAIN_ID => &self.sc_subscriptions,
             _ => anyhow::bail!("unsupported workchain"),
         };
 
         // Insert pending message
         let rx = {
-            let mut pending_messages = pending_messages.entry(dst).or_default();
+            let mut subscription = subscriptions.entry(dst).or_default();
 
-            let rx = match pending_messages.entry(message_hash) {
+            let rx = match subscription.pending_messages.entry(message_hash) {
                 hash_map::Entry::Vacant(entry) => {
                     let (tx, rx) = oneshot::channel();
                     entry.insert(PendingMessage {
@@ -118,8 +115,8 @@ impl Subscription {
             };
 
             // Notify waiters while pending messages is still acquired
-            self.pending_message_count.fetch_add(1, Ordering::Release);
-            self.pending_messages_changed.notify_waiters();
+            self.subscription_count.fetch_add(1, Ordering::Release);
+            self.subscriptions_changed.notify_waiters();
 
             // Drop the lock
             rx
@@ -128,10 +125,15 @@ impl Subscription {
         // Send the message
         if let Err(e) = self.node_tcp_rpc.send_message(data).await {
             // Remove pending message from the map before returning an error
-            match pending_messages.entry(dst) {
+            match subscriptions.entry(dst) {
                 dashmap::mapref::entry::Entry::Occupied(mut entry) => {
-                    entry.get_mut().remove(&message_hash);
-                    if entry.get().is_empty() {
+                    if {
+                        let subscription = entry.get_mut();
+                        subscription.pending_messages.remove(&message_hash);
+                        self.subscription_count.fetch_sub(1, Ordering::Release);
+                        self.subscriptions_changed.notify_waiters();
+                        subscription.is_empty()
+                    } {
                         entry.remove();
                     }
                 }
@@ -144,6 +146,28 @@ impl Subscription {
 
         // Wait for the message execution
         rx.await.map_err(From::from)
+    }
+
+    pub fn subscribe(&self, address: &ton_block::MsgAddressInt) -> TransactionsRx {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let subscriptions = if address.workchain_id() == ton_block::MASTERCHAIN_ID {
+            &self.mc_subscriptions
+        } else {
+            &self.sc_subscriptions
+        };
+
+        let address =
+            ton_types::UInt256::from_le_bytes(&address.address().get_bytestring_on_stack(0));
+
+        subscriptions
+            .entry(address)
+            .or_default()
+            .transactions
+            .push(tx);
+
+        self.subscription_count.fetch_add(1, Ordering::Release);
+        self.subscriptions_changed.notify_waiters();
+        rx
     }
 
     async fn make_blocks_step(&self) -> Result<bool> {
@@ -200,14 +224,14 @@ impl Subscription {
         for task in tasks {
             let blocks = task.await??;
             for (_, item) in blocks {
-                self.process_block(item.block(), &self.sc_pending_messages)?;
+                self.process_block(item.block(), &self.sc_subscriptions)?;
             }
         }
-        self.process_block(next_mc_block.block(), &self.mc_pending_messages)?;
+        self.process_block(next_mc_block.block(), &self.mc_subscriptions)?;
 
-        // Remove expired messages
-        self.remove_expired_messages(&self.mc_pending_messages, next_mc_utime);
-        self.remove_expired_messages(&self.sc_pending_messages, next_mc_utime);
+        // Remove expired messages and empty subscriptions
+        self.subscriptions_gc(&self.mc_subscriptions, next_mc_utime);
+        self.subscriptions_gc(&self.sc_subscriptions, next_mc_utime);
 
         // Update last mc block
         let shards_edge = Edge(
@@ -224,7 +248,7 @@ impl Subscription {
         })));
 
         // Done
-        Ok(self.pending_message_count.load(Ordering::Acquire) > 0)
+        Ok(self.subscription_count.load(Ordering::Acquire) > 0)
     }
 
     async fn get_last_mc_block(&self) -> Result<Arc<StoredMcBlock>> {
@@ -259,18 +283,18 @@ impl Subscription {
     fn process_block(
         &self,
         block: &ton_block::Block,
-        pending_messages: &PendingMessages,
+        subscriptions: &AccountSubscriptions,
     ) -> Result<()> {
         use ton_block::HashmapAugType;
 
-        let counter = &self.pending_message_count;
+        let counter = &self.subscription_count;
         let extra = block.read_extra()?;
         let account_blocks = extra.read_account_blocks()?;
 
         account_blocks.iterate_with_keys(|address, account_block| {
-            let mut pending_messages = match pending_messages.get_mut(&address) {
-                Some(pending_messages) => pending_messages,
-                None => return Ok(true),
+            let mut subscription = match subscriptions.get_mut(&address) {
+                Some(subscription) if !subscription.is_empty() => subscription,
+                _ => return Ok(true),
             };
 
             account_block
@@ -279,20 +303,27 @@ impl Subscription {
                     let cell = tx.reference(0)?;
                     let hash = cell.repr_hash();
                     let data = ton_block::Transaction::construct_from_cell(cell)?;
-                    let in_msg_hash = match &data.in_msg {
+                    let tx = TransactionWithHash { hash, data };
+
+                    for channel in &subscription.transactions {
+                        channel.send(tx.clone()).ok();
+                    }
+
+                    let in_msg_hash = match &tx.data.in_msg {
                         Some(in_msg) => in_msg.hash(),
                         None => return Ok(true),
                     };
 
-                    let mut pending_message = match pending_messages.remove(&in_msg_hash) {
-                        Some(pending_message) => pending_message,
-                        None => return Ok(true),
-                    };
+                    let mut pending_message =
+                        match subscription.pending_messages.remove(&in_msg_hash) {
+                            Some(pending_message) => pending_message,
+                            None => return Ok(true),
+                        };
 
                     counter.fetch_sub(1, Ordering::Release);
 
                     if let Some(channel) = pending_message.tx.take() {
-                        channel.send(Some(TransactionWithHash { hash, data })).ok();
+                        channel.send(Some(tx)).ok();
                     }
 
                     Ok(true)
@@ -304,21 +335,47 @@ impl Subscription {
         Ok(())
     }
 
-    fn remove_expired_messages(&self, pending_messages: &PendingMessages, utime: u32) {
-        let counter = &self.pending_message_count;
+    fn subscriptions_gc(&self, subscriptions: &AccountSubscriptions, utime: u32) {
+        let counter = &self.subscription_count;
 
-        pending_messages.retain(|_, pending_messages| {
-            pending_messages.retain(|_, message| {
+        subscriptions.retain(|_, subscription| {
+            subscription.pending_messages.retain(|_, message| {
                 let is_invalid = message.expire_at < utime;
                 if is_invalid {
                     counter.fetch_sub(1, Ordering::Release);
                 }
                 !is_invalid
             });
-            !pending_messages.is_empty()
+
+            subscription.transactions.retain(|tx| {
+                let is_closed = tx.is_closed();
+                if is_closed {
+                    counter.fetch_sub(1, Ordering::Release);
+                }
+                !is_closed
+            });
+
+            !subscription.is_empty()
         });
     }
 }
+
+#[derive(Default)]
+struct AccountSubscription {
+    pending_messages: FxHashMap<ton_types::UInt256, PendingMessage>,
+    transactions: Vec<TransactionsTx>,
+}
+
+impl AccountSubscription {
+    fn is_empty(&self) -> bool {
+        self.pending_messages.is_empty() && self.transactions.is_empty()
+    }
+}
+
+type AccountSubscriptions = FxDashMap<ton_types::UInt256, AccountSubscription>;
+
+pub type TransactionsTx = mpsc::UnboundedSender<TransactionWithHash>;
+pub type TransactionsRx = mpsc::UnboundedReceiver<TransactionWithHash>;
 
 async fn walk_blocks(subscription: Weak<Subscription>) {
     loop {
@@ -327,10 +384,10 @@ async fn walk_blocks(subscription: Weak<Subscription>) {
             None => return,
         };
 
-        let pending_messages_changed = subscription.pending_messages_changed.clone();
+        let pending_messages_changed = subscription.subscriptions_changed.clone();
         let signal = pending_messages_changed.notified();
 
-        if subscription.pending_message_count.load(Ordering::Acquire) > 0 {
+        if subscription.subscription_count.load(Ordering::Acquire) > 0 {
             loop {
                 match subscription.make_blocks_step().await {
                     Ok(true) => continue,

@@ -1,4 +1,5 @@
 pub mod depool;
+pub mod strategy_factory;
 pub mod wallet;
 
 #[derive(Clone)]

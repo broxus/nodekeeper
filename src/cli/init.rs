@@ -34,6 +34,9 @@ const DEFAULT_MIN_STAKE: u64 = 10;
 const DEFAULT_VALIDATOR_ASSURANCE: u64 = 10_000;
 const DEFAULT_PARTICIPANT_REWARD_FRACTION: u8 = 95;
 
+const DEFAULT_STRATEGIES_FACTORY: &str =
+    "0:519a1205bd021e5e0aa4b64f5ab689bc383efb4f94f283eac78926da71cfe100";
+
 const MNEMONIC_TYPE: crypto::MnemonicType = crypto::MnemonicType::Bip39;
 const DERIVATION_PATH: &str = crypto::DEFAULT_PATH;
 
@@ -294,17 +297,19 @@ async fn prepare_depool_validator(
     theme: &dyn Theme,
     dirs: &ProjectDirs,
     app_config: &mut AppConfig,
-    subscrioption: Arc<Subscription>,
+    subscription: Arc<Subscription>,
 ) -> Result<()> {
     use crate::contracts::*;
 
     let mut steps = Steps::new(4);
+    let default_strategies_factory: ton_block::MsgAddressInt =
+        DEFAULT_STRATEGIES_FACTORY.parse().unwrap();
 
     // Prepare validator wallet
     steps.next("Creating validator wallet");
     let wallet_keypair = prepare_seed(theme, "Validator wallet seed phrase")?;
 
-    let wallet = wallet::Wallet::new(0, wallet_keypair, subscrioption.clone())
+    let wallet = wallet::Wallet::new(0, wallet_keypair, subscription.clone())
         .context("failed to create validator wallet")?;
 
     print_important_value("Validator wallet address", wallet.address());
@@ -315,16 +320,16 @@ async fn prepare_depool_validator(
 
     let depool_type = match Select::with_theme(theme)
         .with_prompt("Select DePool type")
-        .item("Default DePoolV3")
-        .item("StEver")
+        .item("stEVER")
+        .item("DePoolV3")
         .default(0)
         .interact()?
     {
-        0 => DePoolType::DefaultV3,
-        _ => DePoolType::StEver,
+        0 => DePoolType::StEver,
+        _ => DePoolType::DefaultV3,
     };
 
-    let depool = depool::DePool::new(depool_type, depool_keypair, subscrioption)
+    let depool = depool::DePool::new(depool_type, depool_keypair, subscription.clone())
         .context("failed to create DePool")?;
 
     print_important_value("DePool address", depool.address());
@@ -347,6 +352,12 @@ async fn prepare_depool_validator(
     {
         println!("DePool was already deployed");
     } else {
+        let depool_balance = depool
+            .get_balance()
+            .await
+            .context("failed to get DePool balance")?
+            .unwrap_or_default();
+
         let min_stake: u64 = Input::with_theme(theme)
             .with_prompt("Minimal participant stake (EVER)")
             .default(DEFAULT_MIN_STAKE)
@@ -380,9 +391,13 @@ async fn prepare_depool_validator(
         const VALIDATOR_MIN_BALANCE: u128 = 10 * ONE_EVER;
         const DEPOOL_MIN_BALANCE: u128 = 30 * ONE_EVER;
 
+        let depool_initial_balance = DEPOOL_MIN_BALANCE
+            .checked_sub(depool_balance)
+            .map(|diff| std::cmp::max(diff, ONE_EVER));
+
         let balance = wait_for_balance(
             "Waiting for the initial validator balance",
-            DEPOOL_MIN_BALANCE + VALIDATOR_MIN_BALANCE,
+            VALIDATOR_MIN_BALANCE + depool_initial_balance.unwrap_or_default(),
             || async { wallet.get_balance().await },
         )
         .await?;
@@ -390,13 +405,12 @@ async fn prepare_depool_validator(
 
         {
             let spinner = Spinner::start("Transferring funds to the DePool contract");
-            wallet
-                .transfer(InternalMessage::empty(
-                    depool.address().clone(),
-                    DEPOOL_MIN_BALANCE,
-                ))
-                .await
-                .context("failed to transfer funds to the DePool contract")?;
+            if let Some(balance) = depool_initial_balance {
+                wallet
+                    .transfer_deep(InternalMessage::empty(depool.address().clone(), balance))
+                    .await
+                    .context("failed to transfer funds to the DePool contract")?;
+            }
 
             spinner.set_message("Deploying DePool contract");
             depool
@@ -409,9 +423,53 @@ async fn prepare_depool_validator(
                 .await
                 .context("failed to deploy DePool")?;
         }
-        println!("DePool contract was successfully deployed!");
 
-        // TODO
+        println!("DePool contract was successfully deployed!");
+    }
+
+    // Handle stEver depool case
+    if let DePoolType::StEver = depool_type {
+        let allowed_participants = depool
+            .get_allowed_participants()
+            .await
+            .context("failed to get allowed participant")?;
+        if allowed_participants.len() < 2 {
+            let factory: ton_block::MsgAddressInt = Input::with_theme(theme)
+                .with_prompt("Specify strategies factory")
+                .default(default_strategies_factory)
+                .validate_with(|addr: &ton_block::MsgAddressInt| {
+                    let address = addr.clone();
+                    let subscription = subscription.clone();
+                    tokio::runtime::Handle::current().block_on(async move {
+                        strategy_factory::StrategyFactory::new(address, subscription)
+                            .get_details()
+                            .await
+                            .map(|_| ())
+                    })
+                })
+                .interact_text()?;
+
+            let factory = strategy_factory::StrategyFactory::new(factory, subscription);
+
+            let spinner = Spinner::start("Deploying stEVER DePool strategy");
+            let depool_strategy = wallet
+                .transfer_deep(factory.deploy_strategy(depool.address())?)
+                .await
+                .and_then(strategy_factory::StrategyFactory::extract_strategy_address)
+                .context("failed to deploy stEVER DePool strategy")?;
+
+            spinner.println(format!(
+                "{}\n{}\n",
+                style("Strategy address:").green().bold(),
+                style(&depool_strategy).bold()
+            ));
+            spinner.set_message("Updating DePool info");
+
+            wallet
+                .transfer_deep(depool.set_allowed_participant(depool_strategy)?)
+                .await
+                .context("failed to set update DePool strategy")?;
+        }
     }
 
     Ok(())

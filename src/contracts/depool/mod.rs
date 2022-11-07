@@ -10,6 +10,7 @@ use nekoton_utils::SimpleClock;
 use ton_abi::contract::ABI_VERSION_2_2;
 use ton_block::{Deserializable, Serializable};
 
+pub use self::common::{DePoolInfo, RoundsMap};
 use super::{InternalMessage, ONE_EVER};
 use crate::config::DePoolType;
 use crate::subscription::Subscription;
@@ -64,6 +65,11 @@ impl DePool {
             ton_block::AccountState::AccountFrozen { .. } => anyhow::bail!("account frozen"),
             ton_block::AccountState::AccountUninit => Ok(false),
         }
+    }
+
+    pub async fn get_balance(&self) -> Result<Option<u128>> {
+        let account = self.subscription.get_account_state(&self.address).await?;
+        Ok(account.map(|state| state.storage.balance.grams.0))
     }
 
     pub async fn deploy(&self, params: DePoolInitParams) -> Result<()> {

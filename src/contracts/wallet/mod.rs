@@ -3,11 +3,11 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use nekoton_abi::{FunctionBuilder, KnownParamTypePlain, PackAbiPlain};
 use ton_abi::contract::ABI_VERSION_2_3;
-use ton_block::GetRepresentationHash;
+use ton_block::{Deserializable, GetRepresentationHash};
 
 use super::{InternalMessage, ONE_EVER};
 use crate::subscription::Subscription;
-use crate::util::make_default_headers;
+use crate::util::{make_default_headers, TransactionWithHash};
 
 pub struct Wallet {
     keypair: ed25519_dalek::Keypair,
@@ -39,7 +39,46 @@ impl Wallet {
         Ok(account.map(|state| state.storage.balance.grams.0))
     }
 
-    pub async fn transfer(&self, internal_message: InternalMessage) -> Result<()> {
+    pub async fn transfer_deep(
+        &self,
+        internal_message: InternalMessage,
+    ) -> Result<TransactionWithHash> {
+        let dst = internal_message.dst.clone();
+        let mut dst_transactions = self.subscription.subscribe(&dst);
+
+        let src_tx = self.transfer(internal_message).await?;
+
+        let mut out_msg_hash = None;
+        src_tx
+            .data
+            .out_msgs
+            .iterate_slices(|msg| {
+                let Some(msg) = msg.reference_opt(0) else { return Ok(true) };
+
+                let msg_hash = msg.repr_hash();
+                let msg = ton_block::Message::construct_from_cell(msg)?;
+                let Some(header) = msg.int_header() else { return Ok(true) };
+
+                if header.dst == dst {
+                    out_msg_hash = Some(msg_hash);
+                    Ok(false)
+                } else {
+                    Ok(true)
+                }
+            })
+            .context("failed to find outgoing message")?;
+        let out_msg_hash = out_msg_hash.context("outgoing message not found")?;
+
+        while let Some(tx) = dst_transactions.recv().await {
+            let Some(msg) = tx.data.in_msg_cell() else { continue; };
+            if msg.repr_hash() == out_msg_hash {
+                return Ok(tx);
+            }
+        }
+        anyhow::bail!("destination transaction was not found")
+    }
+
+    pub async fn transfer(&self, internal_message: InternalMessage) -> Result<TransactionWithHash> {
         let account = self.get_account_state().await?;
 
         let state_init = match account {
@@ -64,7 +103,8 @@ impl Wallet {
         }
         .pack();
 
-        self.subscription
+        let tx = self
+            .subscription
             .send_message_with_retires(|timeout| {
                 let (expire_at, headers) = make_default_headers(Some(self.keypair.public), timeout);
 
@@ -94,7 +134,8 @@ impl Wallet {
                 Ok((message, expire_at))
             })
             .await?;
-        Ok(())
+
+        Ok(tx)
     }
 
     async fn get_account_state(&self) -> Result<Option<ton_block::AccountStuff>> {

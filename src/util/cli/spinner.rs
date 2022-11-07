@@ -21,6 +21,10 @@ impl Spinner {
     pub fn set_message<T: Into<Cow<'static, str>>>(&self, message: T) {
         self.progress_bar.set_message(message);
     }
+
+    pub fn println<T: AsRef<str>>(&self, text: T) {
+        self.progress_bar.println(text);
+    }
 }
 
 impl Drop for Spinner {
