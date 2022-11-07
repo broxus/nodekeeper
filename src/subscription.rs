@@ -39,6 +39,21 @@ impl Subscription {
         subscription
     }
 
+    pub async fn ensure_ready(&self) -> Result<()> {
+        let (stats, capabilities) = futures_util::future::join(
+            self.node_tcp_rpc.get_stats(),
+            self.node_udp_rpc.get_capabilities(),
+        )
+        .await;
+
+        stats
+            .context("failed to get node stats")?
+            .try_into_running()?;
+        capabilities.context("failed to get node capabilities")?;
+
+        Ok(())
+    }
+
     pub async fn get_blockchain_config(&self) -> Result<ton_block::ConfigParams> {
         Ok(self.node_tcp_rpc.get_config_all().await?.config)
     }
@@ -172,7 +187,10 @@ impl Subscription {
 
     async fn make_blocks_step(&self) -> Result<bool> {
         // Get last masterchain block
-        let last_mc_block = self.get_last_mc_block().await?;
+        let last_mc_block = self
+            .get_last_mc_block()
+            .await
+            .context("failed to get last mc block")?;
 
         // Get next masterchain block
         let next_mc_block = self

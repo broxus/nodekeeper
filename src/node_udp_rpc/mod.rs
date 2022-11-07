@@ -1,4 +1,4 @@
-use std::net::SocketAddrV4;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,9 +21,12 @@ pub struct NodeUdpRpc {
 impl NodeUdpRpc {
     pub async fn new(config: &AppConfigAdnl) -> Result<Self> {
         // Resolve public ip
-        let ip_addr = public_ip::addr_v4()
+        let mut ip_addr = public_ip::addr_v4()
             .await
             .context("failed to resolve public ip")?;
+        if &ip_addr == config.server_address.ip() || config.server_address.ip().is_loopback() {
+            ip_addr = Ipv4Addr::LOCALHOST;
+        }
 
         // Build keystore
         let keystore = adnl::Keystore::builder()
@@ -83,6 +86,10 @@ impl NodeUdpRpc {
                 roundtrip: Default::default(),
             }),
         })
+    }
+
+    pub async fn get_capabilities(&self) -> Result<proto::Capabilities> {
+        self.inner.adnl_query(proto::GetCapabilities, 1000).await
     }
 
     /// Waits for the next block

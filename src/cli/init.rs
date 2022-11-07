@@ -182,11 +182,11 @@ impl CmdInitContracts {
             .await
             .context("failed to create node UDP client")?;
 
-        // Check node status
-        node_tcp_rpc.get_stats().await?.try_into_running()?;
-
         // Create subscription
         let subscription = Subscription::new(node_tcp_rpc, node_udp_rpc);
+
+        // Check node status
+        subscription.ensure_ready().await?;
 
         match Select::with_theme(theme)
             .with_prompt("Select validator type")
