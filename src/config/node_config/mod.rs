@@ -8,6 +8,20 @@ use broxus_util::serde_base64_array;
 use everscale_crypto::ed25519;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+pub struct NodeLogConfig(&'static str);
+
+impl NodeLogConfig {
+    const TEMPLATE: &str = include_str!("log_cfg.yml");
+
+    pub fn generate() -> Self {
+        Self(Self::TEMPLATE)
+    }
+
+    pub fn store<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        std::fs::write(path, self.0).context("failed to write node log config")
+    }
+}
+
 /// Validator node config
 #[derive(Clone, Serialize, Deserialize)]
 pub struct NodeConfig(serde_json::Value);

@@ -1,0 +1,63 @@
+refresh_rate: 30 seconds
+
+appenders:
+  stdout:
+    kind: console
+    encoder:
+      pattern: "{l} [{h({t})}] {I}: {m}{n}"
+
+root:
+  level: error
+  appenders:
+    - stdout
+
+loggers:
+  # node messages
+  ton_node:
+    level: info
+  boot:
+    level: info
+  sync:
+    level: info
+  storage:
+    level: info
+
+  # adnl messages
+  adnl:
+    level: error
+
+  overlay:
+    level: error
+
+  rldp:
+    level: error
+
+  dht:
+    level: error
+
+  # block messages
+  ton_block:
+    level: off
+
+  # block messages
+  executor:
+    level: off
+
+  # tvm messages
+  tvm:
+    level: off
+
+  librdkafka:
+    level: error
+
+  validator:
+    level: info
+
+  catchain:
+    level: info
+
+  validator_session:
+    level: info
+
+  telemetry:
+    level: off

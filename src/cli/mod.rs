@@ -72,6 +72,7 @@ pub const VALIDATOR_MANAGER_SERVICE: &str = "ever-validator-manager";
 pub struct ProjectDirs {
     app_config: PathBuf,
     node_config: PathBuf,
+    node_log_config: PathBuf,
     global_config: PathBuf,
     node_configs_dir: PathBuf,
     binaries_dir: PathBuf,
@@ -99,6 +100,7 @@ impl ProjectDirs {
         Self {
             app_config: root.join("config.toml"),
             node_config: node_configs_dir.join("config.json"),
+            node_log_config: node_configs_dir.join("log_cfg.yml"),
             global_config: node_configs_dir.join("global-config.json"),
             node_configs_dir,
             binaries_dir,
@@ -136,6 +138,10 @@ impl ProjectDirs {
 
     pub fn node_config(&self) -> &Path {
         &self.node_config
+    }
+
+    pub fn node_log_config(&self) -> &Path {
+        &self.node_log_config
     }
 
     pub fn global_config(&self) -> &Path {

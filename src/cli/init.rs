@@ -26,7 +26,7 @@ const DEFAULT_CONTROL_PORT: u16 = 5031;
 const DEFAULT_LOCAL_ADNL_PORT: u16 = 5032;
 const DEFAULT_ADNL_PORT: u16 = 30100;
 const DEFAULT_NODE_REPO: &str = "https://github.com/tonlabs/ton-labs-node.git";
-const DEFAULT_NODE_DB_PATH: &str = "/var/ever/db";
+const DEFAULT_NODE_DB_PATH: &str = "/var/ever/rnode";
 
 const DEFAULT_STAKE_FACTOR: f64 = 3.0;
 
@@ -522,6 +522,11 @@ async fn load_global_config(theme: &dyn Theme, dirs: &ProjectDirs) -> Result<Glo
 }
 
 fn load_node_config(dirs: &ProjectDirs) -> Result<NodeConfig> {
+    let node_log_config = dirs.node_log_config();
+    if !node_log_config.exists() {
+        dirs.store_node_log_config(&NodeLogConfig::generate())?;
+    }
+
     let node_config = dirs.node_config();
     if node_config.exists() {
         return NodeConfig::load(node_config);
@@ -572,7 +577,7 @@ fn setup_control_server(
                         note(server_port)
                     ))
                     .item(format!(
-                        "use control port from stEVER {}",
+                        "use control port from this app {}",
                         note(client_port)
                     ))
                     .item("specify custom port")
@@ -1058,6 +1063,10 @@ impl ProjectDirs {
 
     fn store_node_config(&self, node_config: &NodeConfig) -> Result<()> {
         node_config.store(self.node_config())
+    }
+
+    fn store_node_log_config(&self, node_log_config: &NodeLogConfig) -> Result<()> {
+        node_log_config.store(self.node_log_config())
     }
 
     fn store_global_config<D: AsRef<str>>(&self, global_config: D) -> Result<()> {
