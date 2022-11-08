@@ -32,7 +32,7 @@ pub fn make_default_headers(
     (expire_at, headers)
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TransactionWithHash {
     pub hash: ton_types::UInt256,
     pub data: ton_block::Transaction,

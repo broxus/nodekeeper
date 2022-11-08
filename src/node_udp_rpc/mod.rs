@@ -21,12 +21,9 @@ pub struct NodeUdpRpc {
 impl NodeUdpRpc {
     pub async fn new(config: &AppConfigAdnl) -> Result<Self> {
         // Resolve public ip
-        let mut ip_addr = public_ip::addr_v4()
+        let ip_addr = public_ip::addr_v4()
             .await
             .context("failed to resolve public ip")?;
-        if &ip_addr == config.server_address.ip() || config.server_address.ip().is_loopback() {
-            ip_addr = Ipv4Addr::LOCALHOST;
-        }
 
         // Build keystore
         let keystore = adnl::Keystore::builder()
@@ -42,16 +39,17 @@ impl NodeUdpRpc {
         let (adnl, rldp) = NetworkBuilder::with_adnl(
             SocketAddrV4::new(ip_addr, config.client_port),
             keystore,
-            Default::default(),
+            adnl::NodeOptions {
+                use_loopback_for_neighbours: true,
+                ..Default::default()
+            },
         )
         .with_rldp(rldp_options)
         .build()
         .context("failed to build network stack")?;
 
-        adnl.start().context("failed to start ADNL")?;
-
         // Prepare overlay prefix
-        let overlay_id_full = overlay::IdFull::for_shard_overlay(
+        let overlay_id_full = overlay::IdFull::for_workchain_overlay(
             ton_block::MASTERCHAIN_ID,
             &config.zerostate_file_hash,
         );

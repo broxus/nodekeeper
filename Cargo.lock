@@ -150,9 +150,9 @@ checksum = "ec8a7b6a70fde80372154c65702f00a0f56f3e1c36abbc6c440484be248856db"
 
 [[package]]
 name = "cc"
-version = "1.0.74"
+version = "1.0.75"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "581f5dba903aac52ea3feb5ec4810848460ee833876f1f9b0fdeab1f19091574"
+checksum = "41ca34107f97baef6cfb231b32f36115781856b8f8208e8c580e0bcaea374842"
 dependencies = [
  "jobserver",
 ]
@@ -489,9 +489,9 @@ dependencies = [
 
 [[package]]
 name = "everscale-network"
-version = "0.3.12"
+version = "0.4.0-pre.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84d8e1eed67905d189075b78c3191034d118f404208dc2644568f9cc79008050"
+checksum = "53c363727dd5375b1ecb6b30ae6a5d686516670987943febc4125c81c6a4098c"
 dependencies = [
  "aes",
  "anyhow",
@@ -804,9 +804,9 @@ checksum = "c4a1e36c821dbe04574f602848a19f742f4fb3c98d40449f11bcad18d6b17421"
 
 [[package]]
 name = "hyper"
-version = "0.14.22"
+version = "0.14.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "abfba89e19b959ca163c7752ba59d737c1ceea53a5d31a149c805446fc958064"
+checksum = "034711faac9d2166cb1baf1a2fb0b60b1f277f8492fd72176c17f3515e1abd3c"
 dependencies = [
  "bytes",
  "futures-channel",
@@ -1081,7 +1081,7 @@ dependencies = [
 [[package]]
 name = "nekoton-abi"
 version = "0.11.0"
-source = "git+https://github.com/broxus/nekoton.git#3db21caaa5ab8c195a0e34f225fe71b59cd6569f"
+source = "git+https://github.com/broxus/nekoton.git#74f5634a6abcdd14f3ed00dccb297700488d8475"
 dependencies = [
  "anyhow",
  "base64",
@@ -1107,7 +1107,7 @@ dependencies = [
 [[package]]
 name = "nekoton-derive"
 version = "0.11.0"
-source = "git+https://github.com/broxus/nekoton.git#3db21caaa5ab8c195a0e34f225fe71b59cd6569f"
+source = "git+https://github.com/broxus/nekoton.git#74f5634a6abcdd14f3ed00dccb297700488d8475"
 dependencies = [
  "either",
  "proc-macro2",
@@ -1118,7 +1118,7 @@ dependencies = [
 [[package]]
 name = "nekoton-utils"
 version = "0.11.0"
-source = "git+https://github.com/broxus/nekoton.git#3db21caaa5ab8c195a0e34f225fe71b59cd6569f"
+source = "git+https://github.com/broxus/nekoton.git#74f5634a6abcdd14f3ed00dccb297700488d8475"
 dependencies = [
  "anyhow",
  "base64",
