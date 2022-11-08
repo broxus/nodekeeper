@@ -58,7 +58,7 @@ pub struct CliContext {
 
 impl CliContext {
     pub fn load_config(&self) -> Result<AppConfig> {
-        AppConfig::load(self.dirs.app_config())
+        AppConfig::load(&self.dirs.app_config)
     }
 
     pub fn dirs(&self) -> &ProjectDirs {
@@ -78,6 +78,9 @@ pub struct ProjectDirs {
     binaries_dir: PathBuf,
     node_binary: PathBuf,
     git_cache_dir: PathBuf,
+    keys_dir: PathBuf,
+    validator_keys: PathBuf,
+    depool_keys: PathBuf,
     root: PathBuf,
     validator_service: PathBuf,
     validator_manager_service: PathBuf,
@@ -97,6 +100,10 @@ impl ProjectDirs {
         let validator_manager_service =
             systemd_root.join(format!("{VALIDATOR_MANAGER_SERVICE}.service"));
 
+        let keys_dir = root.join("keys");
+        let validator_keys = keys_dir.join("vld.keys.json");
+        let depool_keys = keys_dir.join("depool.keys.json");
+
         Self {
             app_config: root.join("config.toml"),
             node_config: node_configs_dir.join("config.json"),
@@ -106,54 +113,13 @@ impl ProjectDirs {
             binaries_dir,
             node_binary,
             git_cache_dir,
+            keys_dir,
+            validator_keys,
+            depool_keys,
             root,
             validator_service,
             validator_manager_service,
         }
-    }
-
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
-
-    pub fn app_config(&self) -> &Path {
-        &self.app_config
-    }
-
-    pub fn binaries_dir(&self) -> &Path {
-        &self.binaries_dir
-    }
-
-    pub fn node_binary(&self) -> &Path {
-        &self.node_binary
-    }
-
-    pub fn git_cache_dir(&self) -> &Path {
-        &self.git_cache_dir
-    }
-
-    pub fn node_configs_dir(&self) -> &Path {
-        &self.node_configs_dir
-    }
-
-    pub fn node_config(&self) -> &Path {
-        &self.node_config
-    }
-
-    pub fn node_log_config(&self) -> &Path {
-        &self.node_log_config
-    }
-
-    pub fn global_config(&self) -> &Path {
-        &self.global_config
-    }
-
-    pub fn validator_service(&self) -> &Path {
-        &self.validator_service
-    }
-
-    pub fn validator_manager_service(&self) -> &Path {
-        &self.validator_manager_service
     }
 }
 

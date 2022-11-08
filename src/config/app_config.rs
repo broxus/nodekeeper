@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use broxus_util::{
-    const_duration_ms, serde_duration_ms, serde_hex_array, serde_string, serde_string_or_number,
+    const_duration_ms, serde_duration_ms, serde_hex_array, serde_optional_string, serde_string,
+    serde_string_or_number,
 };
 use everscale_crypto::ed25519;
 use serde::{Deserialize, Serialize};
@@ -109,20 +110,50 @@ pub struct AppConfigAdnl {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "lowercase", tag = "type")]
 pub enum AppConfigValidation {
-    Single {
-        #[serde(with = "serde_mc_address")]
-        address: ton_block::MsgAddressInt,
-        #[serde(with = "serde_string_or_number")]
-        stake_per_round: u64,
-        stake_factor: u32,
-    },
-    DePool {
-        #[serde(with = "serde_string")]
-        owner: ton_block::MsgAddressInt,
-        #[serde(with = "serde_string")]
-        depool: ton_block::MsgAddressInt,
-        depool_type: DePoolType,
-    },
+    Single(AppConfigValidationSingle),
+    DePool(AppConfigValidationDePool),
+}
+
+impl AppConfigValidation {
+    pub fn as_single(&self) -> Option<&AppConfigValidationSingle> {
+        match self {
+            Self::Single(single) => Some(single),
+            Self::DePool(_) => None,
+        }
+    }
+
+    pub fn as_depool(&self) -> Option<&AppConfigValidationDePool> {
+        match self {
+            Self::Single(_) => None,
+            Self::DePool(depool) => Some(depool),
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppConfigValidationSingle {
+    #[serde(with = "serde_mc_address")]
+    pub address: ton_block::MsgAddressInt,
+    #[serde(with = "serde_string_or_number")]
+    pub stake_per_round: u64,
+    pub stake_factor: u32,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppConfigValidationDePool {
+    #[serde(with = "serde_string")]
+    pub owner: ton_block::MsgAddressInt,
+    #[serde(with = "serde_string")]
+    pub depool: ton_block::MsgAddressInt,
+    pub depool_type: DePoolType,
+    #[serde(
+        default,
+        with = "serde_optional_string",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub strategy: Option<ton_block::MsgAddressInt>,
 }
 
 #[derive(Copy, Clone, Serialize, Deserialize)]

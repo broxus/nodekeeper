@@ -34,6 +34,13 @@ impl FromStr for MnemonicType {
     }
 }
 
+pub fn validate_phrase(phrase: &str, mnemonic_type: MnemonicType) -> Result<()> {
+    match mnemonic_type {
+        MnemonicType::Legacy => self::legacy::validate_phrase(phrase),
+        MnemonicType::Bip39 => self::bip39::validate_phrase(phrase),
+    }
+}
+
 pub fn derive_from_phrase(
     phrase: &str,
     mnemonic_type: MnemonicType,

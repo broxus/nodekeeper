@@ -4,6 +4,8 @@ use std::sync::{Arc, Weak};
 
 use anyhow::{Context, Result};
 use arc_swap::ArcSwapOption;
+use nekoton_abi::FunctionExt;
+use nekoton_utils::SimpleClock;
 use rustc_hash::FxHashMap;
 use tokio::sync::{mpsc, oneshot, Notify};
 use ton_block::{Deserializable, Serializable};
@@ -73,6 +75,23 @@ impl Subscription {
         {
             ton_block::Account::Account(state) => Ok(Some(state)),
             ton_block::Account::AccountNone => Ok(None),
+        }
+    }
+
+    pub async fn run_local(
+        &self,
+        address: &ton_block::MsgAddressInt,
+        function: &ton_abi::Function,
+        inputs: &[ton_abi::Token],
+    ) -> Result<Vec<ton_abi::Token>> {
+        let account = self
+            .get_account_state(&address)
+            .await?
+            .context("account not deployed")?;
+        let output = function.run_local(&SimpleClock, account, inputs)?;
+        match output.tokens {
+            Some(tokens) => Ok(tokens),
+            None => anyhow::bail!("getter failed (exit code: {})", output.result_code),
         }
     }
 

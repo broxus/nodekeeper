@@ -6,8 +6,8 @@ use nekoton_abi::FunctionExt;
 use ton_block::{Deserializable, Serializable};
 
 use super::CliContext;
-use crate::config::{AppConfig, GlobalConfig};
-use crate::node_tcp_rpc::{NodeStats, NodeTcpRpc};
+use crate::config::{AppConfig, StoredKeys};
+use crate::node_tcp_rpc::NodeTcpRpc;
 use crate::node_udp_rpc::NodeUdpRpc;
 use crate::subscription::Subscription;
 use crate::util::*;
@@ -243,7 +243,7 @@ impl CmdSend {
             .with_context(|| format!("method `{}` not found", self.method))?;
 
         let input = nekoton_abi::parse_abi_tokens(&method.inputs, self.args)?;
-        let keys = parse_keys(self.sign)?;
+        let keys = self.sign.map(StoredKeys::load_as_keypair).transpose()?;
         let state_init = parse_optional_state_init(self.state_init)?;
 
         // Prepare external message

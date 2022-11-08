@@ -37,9 +37,6 @@ const DEFAULT_PARTICIPANT_REWARD_FRACTION: u8 = 95;
 const DEFAULT_STRATEGIES_FACTORY: &str =
     "0:519a1205bd021e5e0aa4b64f5ab689bc383efb4f94f283eac78926da71cfe100";
 
-const MNEMONIC_TYPE: crypto::MnemonicType = crypto::MnemonicType::Bip39;
-const DERIVATION_PATH: &str = crypto::DEFAULT_PATH;
-
 #[derive(FromArgs)]
 /// Prepares configs and binaries
 #[argh(subcommand, name = "init")]
@@ -163,6 +160,10 @@ impl CmdInitContracts {
         let mut config = ctx.load_config()?;
         let dirs = ctx.dirs();
 
+        if !dirs.keys_dir.exists() {
+            std::fs::create_dir_all(&dirs.keys_dir).context("failed to create keys dir")?;
+        }
+
         // Check whether validation was already configured
         if config.validation.is_some()
             && !confirm(
@@ -220,6 +221,12 @@ async fn prepare_single_validator(
         factor as f64 / F
     }
 
+    // Get previous config
+    let prev = app_config
+        .validation
+        .as_ref()
+        .and_then(AppConfigValidation::as_single);
+
     // Fetch blockchain stakes config for input validation
     let stakes_config = subscrioption
         .get_blockchain_config()
@@ -235,7 +242,7 @@ async fn prepare_single_validator(
 
     // Prepare validator wallet
     steps.next("Creating validator wallet");
-    let keypair = prepare_seed(theme, "Validator wallet seed phrase")?;
+    let keypair = prepare_keys(theme, "Validator wallet seed phrase", &dirs.validator_keys)?;
 
     let wallet = wallet::Wallet::new(-1, keypair, subscrioption)
         .context("failed to create validator wallet")?;
@@ -270,11 +277,11 @@ async fn prepare_single_validator(
     let stake_factor = std::cmp::min(to_factor_repr(stake_factor), max_stake_factor);
 
     // Save config
-    app_config.validation = Some(AppConfigValidation::Single {
+    app_config.validation = Some(AppConfigValidation::Single(AppConfigValidationSingle {
         address: wallet.address().clone(),
         stake_per_round,
         stake_factor,
-    });
+    }));
     dirs.store_app_config(app_config)?;
 
     // Wait until validator wallet will have enough funds for staking
@@ -307,7 +314,7 @@ async fn prepare_depool_validator(
 
     // Prepare validator wallet
     steps.next("Creating validator wallet");
-    let wallet_keypair = prepare_seed(theme, "Validator wallet seed phrase")?;
+    let wallet_keypair = prepare_keys(theme, "Validator wallet seed phrase", &dirs.validator_keys)?;
 
     let wallet = wallet::Wallet::new(0, wallet_keypair, subscription.clone())
         .context("failed to create validator wallet")?;
@@ -316,7 +323,7 @@ async fn prepare_depool_validator(
 
     // Create depool
     steps.next("Creating depool");
-    let depool_keypair = prepare_seed(theme, "DePool seed phrase")?;
+    let depool_keypair = prepare_keys(theme, "DePool seed phrase", &dirs.depool_keys)?;
 
     let depool_type = match Select::with_theme(theme)
         .with_prompt("Select DePool type")
@@ -335,11 +342,12 @@ async fn prepare_depool_validator(
     print_important_value("DePool address", depool.address());
 
     // Save config
-    app_config.validation = Some(AppConfigValidation::DePool {
+    app_config.validation = Some(AppConfigValidation::DePool(AppConfigValidationDePool {
         owner: wallet.address().clone(),
         depool: depool.address().clone(),
         depool_type,
-    });
+        strategy: None,
+    }));
     dirs.store_app_config(app_config)?;
 
     // Configure and deploy DePool
@@ -434,41 +442,93 @@ async fn prepare_depool_validator(
             .await
             .context("failed to get allowed participant")?;
         if allowed_participants.len() < 2 {
-            let factory: ton_block::MsgAddressInt = Input::with_theme(theme)
-                .with_prompt("Specify strategies factory")
-                .default(default_strategies_factory)
-                .validate_with(|addr: &ton_block::MsgAddressInt| {
-                    let address = addr.clone();
-                    let subscription = subscription.clone();
-                    tokio::runtime::Handle::current().block_on(async move {
-                        strategy_factory::StrategyFactory::new(address, subscription)
-                            .get_details()
+            let (mut spinner, strategy) = loop {
+                match Select::with_theme(theme)
+                    .item("Deploy new stEVER DePool strategy")
+                    .item("Use existing stEVER DePool strategy")
+                    .default(0)
+                    .interact()?
+                {
+                    0 => {
+                        let AddressInput(factory) = Input::with_theme(theme)
+                            .with_prompt("Specify strategies factory")
+                            .default(AddressInput(default_strategies_factory))
+                            .validate_with(|addr: &AddressInput| {
+                                let address = addr.0.clone();
+                                let subscription = subscription.clone();
+                                block_in_place(async move {
+                                    strategy_factory::StrategyFactory::new(address, subscription)
+                                        .get_details()
+                                        .await
+                                        .map(|_| ())
+                                })
+                            })
+                            .interact_text()?;
+
+                        let factory = strategy_factory::StrategyFactory::new(factory, subscription);
+
+                        let deployment_message = factory.deploy_strategy(depool.address())?;
+
+                        wait_for_balance(
+                            "Waiting for some funds to deploy stEVER DePool strategy",
+                            deployment_message.amount + ONE_EVER,
+                            || async { wallet.get_balance().await },
+                        )
+                        .await?;
+
+                        let spinner = Spinner::start("Deploying stEVER DePool strategy");
+                        let depool_strategy = wallet
+                            .transfer_deep(deployment_message)
                             .await
-                            .map(|_| ())
-                    })
-                })
-                .interact_text()?;
+                            .and_then(strategy_factory::StrategyFactory::extract_strategy_address)
+                            .context("failed to deploy stEVER DePool strategy")?;
 
-            let factory = strategy_factory::StrategyFactory::new(factory, subscription);
+                        spinner.println(format!(
+                            "{}\n{}\n\n",
+                            style("Strategy address:").green().bold(),
+                            style(&depool_strategy).bold()
+                        ));
 
-            let spinner = Spinner::start("Deploying stEVER DePool strategy");
-            let depool_strategy = wallet
-                .transfer_deep(factory.deploy_strategy(depool.address())?)
-                .await
-                .and_then(strategy_factory::StrategyFactory::extract_strategy_address)
-                .context("failed to deploy stEVER DePool strategy")?;
+                        break (Some(spinner), depool_strategy);
+                    }
+                    _ => {
+                        let OptionalAddressInput(strategy) = Input::with_theme(theme)
+                            .with_prompt("Specify strategy address")
+                            .allow_empty(true)
+                            .validate_with(|addr: &OptionalAddressInput| {
+                                let OptionalAddressInput(Some(address)) = addr else { return Ok(()) };
+                                match block_in_place(async {
+                                    strategy::Strategy::new(address.clone(), subscription.clone())
+                                        .get_details()
+                                        .await
+                                        .context("failed to get details")
+                                }) {
+                                    Ok(details) if &details.depool != depool.address() => {
+                                        Err("Strategy was deployed for the different DePool".to_owned())
+                                    }
+                                    Ok(_) => Ok(()),
+                                    Err(e) => Err(format!("Invalid strategy: {e:?}")),
+                                }
+                            })
+                            .interact_text()?;
 
-            spinner.println(format!(
-                "{}\n{}\n",
-                style("Strategy address:").green().bold(),
-                style(&depool_strategy).bold()
-            ));
+                        match strategy {
+                            Some(strategy) => break (None, strategy),
+                            None => continue,
+                        }
+                    }
+                }
+            };
+
+            let spinner = spinner.get_or_insert_with(|| Spinner::start(""));
             spinner.set_message("Updating DePool info");
 
             wallet
-                .transfer_deep(depool.set_allowed_participant(depool_strategy)?)
+                .transfer_deep(depool.set_allowed_participant(strategy)?)
                 .await
                 .context("failed to set update DePool strategy")?;
+
+            println!("DePool contract was successfully deployed!");
         }
     }
 
@@ -498,35 +558,68 @@ where
     }
 }
 
-fn prepare_seed(theme: &dyn Theme, name: &str) -> Result<ed25519_dalek::Keypair> {
-    fn derive(phrase: &dyn AsRef<str>) -> Result<ed25519_dalek::Keypair> {
-        crypto::derive_from_phrase(phrase.as_ref(), MNEMONIC_TYPE, DERIVATION_PATH)
+fn prepare_keys<P: AsRef<Path>>(
+    theme: &dyn Theme,
+    name: &str,
+    path: P,
+) -> Result<ed25519_dalek::Keypair> {
+    selector_variant!(Action, {
+        Existing => "Use existing keys",
+        Generate => "Generate new keys",
+        Import => "Import seed",
+    });
+
+    let path = path.as_ref();
+
+    let mut items = Action::all();
+    if !path.exists() {
+        items.remove(0);
     }
 
-    let seed = match Select::with_theme(theme)
-        .item("Generate new seed")
-        .item("Import seed")
-        .default(0)
-        .interact()?
-    {
-        0 => {
-            let seed = crypto::generate_seed(MNEMONIC_TYPE);
-            print_important_value(name, &seed);
-            seed
+    let mut select = Select::with_theme(theme);
+    select.items(&items).default(0);
+
+    let store_keys = |keys: &StoredKeys| -> Result<bool> {
+        if path.exists() && !confirm(theme, false, "Overwrite existing keys?")? {
+            return Ok(false);
         }
-        _ => Input::with_theme(theme)
-            .with_prompt(name)
-            .validate_with(|input: &String| match derive(input) {
-                Ok(_) => Ok(()),
-                Err(e) => Err(e.to_string()),
-            })
-            .interact_text()?,
+        keys.store(path)?;
+        Ok(true)
     };
-    derive(&seed)
+
+    let stored_keys = loop {
+        match items[select.interact()?] {
+            Action::Existing => match StoredKeys::load(path) {
+                Ok(keys) => break keys,
+                Err(e) => {
+                    print_error(format!("failed to load existing keys: {e:?}"));
+                    continue;
+                }
+            },
+            Action::Generate => {
+                let keys = StoredKeys::generate()?;
+                let true = store_keys(&keys)? else { continue; };
+                break keys;
+            }
+            Action::Import => {
+                let seed = Input::with_theme(theme)
+                    .with_prompt(name)
+                    .validate_with(|phrase: &String| {
+                        crypto::validate_phrase(phrase, StoredKeys::DEFAULT_MNEMONIC_TYPE)
+                    })
+                    .interact_text()?;
+                let keys = StoredKeys::from_seed(seed)?;
+                let true = store_keys(&keys)? else { continue; };
+                break keys;
+            }
+        }
+    };
+
+    Ok(stored_keys.as_keypair())
 }
 
 fn prepare_root_dir(theme: &dyn Theme, dirs: &ProjectDirs) -> Result<bool> {
-    let root = dirs.root();
+    let root = &dirs.root;
     if root.exists() {
         return Ok(true);
     }
@@ -544,19 +637,24 @@ fn prepare_root_dir(theme: &dyn Theme, dirs: &ProjectDirs) -> Result<bool> {
 }
 
 async fn load_global_config(theme: &dyn Theme, dirs: &ProjectDirs) -> Result<GlobalConfig> {
-    let global_config = dirs.global_config();
+    selector_variant!(Action, {
+        Mainnet => "Everscale mainnet",
+        Testnet => "Everscale testnet",
+        Other => "other",
+    });
+
+    let global_config = &dirs.global_config;
     if !global_config.exists() {
-        let data = match Select::with_theme(theme)
+        let items = Action::all();
+        let data = match items[Select::with_theme(theme)
             .with_prompt("Select network")
-            .item("Everscale mainnet")
-            .item("Everscale testnet")
-            .item("other")
+            .items(&items)
             .default(0)
-            .interact()?
+            .interact()?]
         {
-            0 => Cow::Borrowed(GlobalConfig::MAINNET),
-            1 => Cow::Borrowed(GlobalConfig::TESTNET),
-            _ => {
+            Action::Mainnet => Cow::Borrowed(GlobalConfig::MAINNET),
+            Action::Testnet => Cow::Borrowed(GlobalConfig::TESTNET),
+            Action::Other => {
                 let url: Url = Input::with_theme(theme)
                     .with_prompt("Config URL")
                     .interact_text()?;
@@ -571,7 +669,7 @@ async fn load_global_config(theme: &dyn Theme, dirs: &ProjectDirs) -> Result<Glo
             }
         };
 
-        std::fs::create_dir_all(dirs.node_configs_dir())
+        std::fs::create_dir_all(&dirs.node_configs_dir)
             .context("failed to create node configs dir")?;
         dirs.store_global_config(data)?;
     }
@@ -580,12 +678,12 @@ async fn load_global_config(theme: &dyn Theme, dirs: &ProjectDirs) -> Result<Glo
 }
 
 fn load_node_config(dirs: &ProjectDirs) -> Result<NodeConfig> {
-    let node_log_config = dirs.node_log_config();
+    let node_log_config = &dirs.node_log_config;
     if !node_log_config.exists() {
         dirs.store_node_log_config(&NodeLogConfig::generate())?;
     }
 
-    let node_config = dirs.node_config();
+    let node_config = &dirs.node_config;
     if node_config.exists() {
         return NodeConfig::load(node_config);
     }
@@ -596,7 +694,7 @@ fn load_node_config(dirs: &ProjectDirs) -> Result<NodeConfig> {
 }
 
 fn load_app_config(dirs: &ProjectDirs) -> Result<AppConfig> {
-    let app_config = dirs.app_config();
+    let app_config = &dirs.app_config;
     if app_config.exists() {
         return AppConfig::load(app_config);
     }
@@ -846,7 +944,7 @@ async fn setup_adnl(
                 zerostate_file_hash,
             });
 
-            app_config.store(dirs.app_config())?;
+            app_config.store(&dirs.app_config)?;
         }
         (_, None) => {
             let addr: Ipv4Addr = {
@@ -948,7 +1046,7 @@ fn setup_node_config_paths(
         }
     }
 
-    node_config.set_global_config_path(dirs.global_config())?;
+    node_config.set_global_config_path(&dirs.global_config)?;
 
     if let Some(db_path) = node_config.get_internal_db_path()? {
         if db_path != PathBuf::from(DB_PATH_FALLBACK) {
@@ -978,7 +1076,7 @@ fn setup_node_config_paths(
 }
 
 async fn setup_binary(theme: &dyn Theme, dirs: &ProjectDirs) -> Result<bool> {
-    if dirs.node_binary().exists() {
+    if dirs.node_binary.exists() {
         return Ok(true);
     }
     dirs.prepare_binaries_dir()?;
@@ -1001,7 +1099,7 @@ fn check_systemd_service(dirs: &ProjectDirs) -> Result<()> {
         .unwrap_or_else(|| OsStr::new("stever"))
         .to_string_lossy();
 
-    if !dirs.validator_service().exists() || !dirs.validator_manager_service().exists() {
+    if !dirs.validator_service.exists() || !dirs.validator_manager_service.exists() {
         println!(
             "\nTo configure systemd services, run:\n    sudo {} init systemd",
             current_exe
@@ -1048,10 +1146,10 @@ fn prepare_services(theme: &dyn Theme, dirs: &ProjectDirs) -> Result<()> {
     };
 
     dirs.create_systemd_validator_service(&user)?;
-    print_service(dirs.validator_service());
+    print_service(&dirs.validator_service);
 
     dirs.create_systemd_validator_manager_service(&user)?;
-    print_service(dirs.validator_manager_service());
+    print_service(&dirs.validator_manager_service);
 
     Ok(())
 }
@@ -1116,24 +1214,24 @@ WantedBy=multi-user.target
 
 impl ProjectDirs {
     fn store_app_config(&self, app_config: &AppConfig) -> Result<()> {
-        app_config.store(self.app_config())
+        app_config.store(&self.app_config)
     }
 
     fn store_node_config(&self, node_config: &NodeConfig) -> Result<()> {
-        node_config.store(self.node_config())
+        node_config.store(&self.node_config)
     }
 
     fn store_node_log_config(&self, node_log_config: &NodeLogConfig) -> Result<()> {
-        node_log_config.store(self.node_log_config())
+        node_log_config.store(&self.node_log_config)
     }
 
     fn store_global_config<D: AsRef<str>>(&self, global_config: D) -> Result<()> {
-        std::fs::write(self.global_config(), global_config.as_ref())
+        std::fs::write(&self.global_config, global_config.as_ref())
             .context("failed to write global config")
     }
 
     pub fn prepare_binaries_dir(&self) -> Result<()> {
-        let binaries_dir = self.binaries_dir();
+        let binaries_dir = &self.binaries_dir;
         if !binaries_dir.exists() {
             std::fs::create_dir_all(binaries_dir).context("failed to create binaries directory")?;
         }
@@ -1141,7 +1239,7 @@ impl ProjectDirs {
     }
 
     pub async fn install_node_from_repo(&self, repo: &Url) -> Result<()> {
-        let git_dir = self.git_cache_dir();
+        let git_dir = &self.git_cache_dir;
         if !git_dir.exists() {
             std::fs::create_dir_all(git_dir).context("failed to create git cache directory")?;
         }
@@ -1151,14 +1249,14 @@ impl ProjectDirs {
         clone_repo(repo, &repo_dir).await?;
         let binary = build_node(repo_dir).await?;
 
-        std::fs::copy(binary, self.node_binary()).context("failed to copy node binary")?;
+        std::fs::copy(binary, &self.node_binary).context("failed to copy node binary")?;
         Ok(())
     }
 
     pub fn create_systemd_validator_service(&self, user: &str) -> Result<()> {
-        let node = std::fs::canonicalize(self.node_binary())
+        let node = std::fs::canonicalize(&self.node_binary)
             .context("failed to canonicalize node binary path")?;
-        let node_configs_dir = std::fs::canonicalize(self.node_configs_dir())
+        let node_configs_dir = std::fs::canonicalize(&self.node_configs_dir)
             .context("failed to canonicalize node configs path")?;
 
         let validator_service = format!(
@@ -1167,7 +1265,7 @@ impl ProjectDirs {
             node_binary = node.display(),
             configs_dir = node_configs_dir.display()
         );
-        std::fs::write(self.validator_service(), validator_service)
+        std::fs::write(&self.validator_service, validator_service)
             .context("failed to create systemd validator service")?;
 
         Ok(())
@@ -1175,7 +1273,7 @@ impl ProjectDirs {
 
     pub fn create_systemd_validator_manager_service(&self, user: &str) -> Result<()> {
         let current_exe = std::env::current_exe()?;
-        let root_dir = std::fs::canonicalize(self.root())
+        let root_dir = std::fs::canonicalize(&self.root)
             .context("failed to canonicalize root directory path")?;
 
         let validator_manager_service = format!(
@@ -1184,7 +1282,7 @@ impl ProjectDirs {
             stever_binary = current_exe.display(),
             root_dir = root_dir.display(),
         );
-        std::fs::write(self.validator_manager_service(), validator_manager_service)
+        std::fs::write(&self.validator_manager_service, validator_manager_service)
             .context("failed to create systemd validator manager service")?;
 
         Ok(())
@@ -1319,6 +1417,10 @@ fn print_important_value(title: impl std::fmt::Display, value: impl std::fmt::Di
         style(format!("{title}:")).green().bold(),
         style(value).bold()
     );
+}
+
+fn print_error(text: impl std::fmt::Display) {
+    println!("{}", style(format!("✘ {text}")).red().bold());
 }
 
 fn note(text: impl std::fmt::Display) -> impl std::fmt::Display {

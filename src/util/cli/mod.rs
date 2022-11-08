@@ -30,6 +30,50 @@ impl<T: Into<u128> + Copy> std::fmt::Display for Ever<T> {
     }
 }
 
+#[derive(Clone)]
+pub struct AddressInput(pub ton_block::MsgAddressInt);
+
+impl std::fmt::Display for AddressInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FromStr for AddressInput {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        ton_block::MsgAddressInt::from_str(s.trim())
+            .map(Self)
+            .map_err(|_| anyhow::Error::msg("invalid address"))
+    }
+}
+
+#[derive(Clone)]
+pub struct OptionalAddressInput(pub Option<ton_block::MsgAddressInt>);
+
+impl std::fmt::Display for OptionalAddressInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            Some(addr) => addr.fmt(f),
+            None => Ok(()),
+        }
+    }
+}
+
+impl FromStr for OptionalAddressInput {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.is_empty() {
+            return Ok(Self(None));
+        }
+
+        let AddressInput(addr) = s.parse()?;
+        Ok(Self(Some(addr)))
+    }
+}
+
 pub fn print_output<T: std::fmt::Display>(arg: T) {
     if console::user_attended() {
         writeln!(std::io::stdout(), "{arg:#}")
@@ -104,26 +148,4 @@ pub fn parse_hex_or_base64(data: &str) -> Result<Vec<u8>> {
             },
         }
     }
-}
-
-pub fn parse_keys(keys: Option<PathBuf>) -> Result<Option<ed25519_dalek::Keypair>> {
-    #[derive(Deserialize)]
-    struct StoredKeyPair {
-        #[serde(with = "serde_hex_array")]
-        secret: [u8; 32],
-    }
-
-    let Some(path) = keys else {
-        return Ok(None);
-    };
-
-    let keypair = std::fs::read_to_string(path).context("failed to read keys")?;
-    let keypair =
-        serde_json::from_str::<StoredKeyPair>(&keypair).context("failed to parse keys")?;
-
-    let secret =
-        ed25519_dalek::SecretKey::from_bytes(&keypair.secret).context("invalid secret key")?;
-    let public = ed25519_dalek::PublicKey::from(&secret);
-
-    Ok(Some(ed25519_dalek::Keypair { secret, public }))
 }

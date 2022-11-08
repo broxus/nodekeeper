@@ -2,15 +2,13 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use nekoton_abi::{
-    BuildTokenValue, EventBuilder, FunctionBuilder, FunctionExt, KnownParamType,
-    KnownParamTypePlain, TokenValueExt, UnpackAbi, UnpackAbiPlain, UnpackFirst,
+    BuildTokenValue, EventBuilder, FunctionBuilder, KnownParamType, KnownParamTypePlain,
+    TokenValueExt, UnpackAbi, UnpackAbiPlain, UnpackFirst,
 };
-use nekoton_utils::SimpleClock;
-
-use crate::subscription::Subscription;
-use crate::util::TransactionWithHash;
 
 use super::{InternalMessage, ONE_EVER};
+use crate::subscription::Subscription;
+use crate::util::TransactionWithHash;
 
 pub struct StrategyFactory {
     pub address: ton_block::MsgAddressInt,
@@ -18,7 +16,7 @@ pub struct StrategyFactory {
 }
 
 impl StrategyFactory {
-    pub const DEPLOYMENT_FEE: u128 = 23 * ONE_EVER;
+    pub const DEPLOYMENT_FEE: u128 = 22 * ONE_EVER;
 
     pub fn new(address: ton_block::MsgAddressInt, subscription: Arc<Subscription>) -> Self {
         Self {
@@ -27,9 +25,14 @@ impl StrategyFactory {
         }
     }
 
-    pub async fn get_details(&self) -> Result<factory::Details> {
+    pub async fn get_details(&self) -> Result<Details> {
         let details = self
-            .run_local(factory::get_details(), &[])
+            .subscription
+            .run_local(
+                &self.address,
+                methods::get_details(),
+                &[0u32.token_value().named("answerId")],
+            )
             .await?
             .unpack_first()?;
         Ok(details)
@@ -39,7 +42,7 @@ impl StrategyFactory {
         Ok(InternalMessage {
             amount: Self::DEPLOYMENT_FEE,
             dst: self.address.clone(),
-            payload: factory::deploy_strategy()
+            payload: methods::deploy_strategy()
                 .encode_internal_input(&[depool.token_value().named("depool")])?
                 .into(),
         })
@@ -56,7 +59,7 @@ impl StrategyFactory {
             let Ok(function_id) = body.get_next_u32() else { return Ok(true); };
 
             if function_id == events::new_strategy_deployed().id {
-                let event: events::NewStrategyDeployed = ton_abi::TokenValue::decode_params(
+                let event: NewStrategyDeployed = ton_abi::TokenValue::decode_params(
                     &events::new_strategy_deployed().inputs,
                     body,
                     &ABI_VERSION,
@@ -72,40 +75,24 @@ impl StrategyFactory {
         })?;
         address.context("strategy deployment event not found")
     }
-
-    async fn run_local(
-        &self,
-        function: &ton_abi::Function,
-        inputs: &[ton_abi::Token],
-    ) -> Result<Vec<ton_abi::Token>> {
-        let account = self
-            .subscription
-            .get_account_state(&self.address)
-            .await?
-            .context("factory not deployed")?;
-        function
-            .run_local(&SimpleClock, account, inputs)?
-            .tokens
-            .context("no output")
-    }
 }
 
-mod factory {
-    use super::*;
+#[derive(Clone, UnpackAbi, KnownParamType)]
+pub struct Details {
+    #[abi(address)]
+    pub stever_vault: ton_block::MsgAddressInt,
+    #[abi(address)]
+    pub owner: ton_block::MsgAddressInt,
+    #[abi(uint32)]
+    pub strategy_version: u32,
+    #[abi(uint32)]
+    pub strategy_count: u32,
+    #[abi(uint32)]
+    pub factory_version: u32,
+}
 
-    #[derive(Clone, UnpackAbi, KnownParamType)]
-    pub struct Details {
-        #[abi(address)]
-        pub stever_vault: ton_block::MsgAddressInt,
-        #[abi(address)]
-        pub owner: ton_block::MsgAddressInt,
-        #[abi(uint32)]
-        pub strategy_version: u32,
-        #[abi(uint32)]
-        pub strategy_count: u32,
-        #[abi(uint32)]
-        pub factory_version: u32,
-    }
+mod methods {
+    use super::*;
 
     pub fn get_details() -> &'static ton_abi::Function {
         once!(ton_abi::Function, || {
@@ -114,6 +101,7 @@ mod factory {
                 .pubkey_header()
                 .time_header()
                 .expire_header()
+                .input("answerId", u32::param_type())
                 .output("details", Details::param_type())
                 .build()
         })
@@ -129,18 +117,18 @@ mod factory {
     }
 }
 
+#[derive(Clone, UnpackAbiPlain, KnownParamTypePlain)]
+struct NewStrategyDeployed {
+    #[abi(address)]
+    strategy: ton_block::MsgAddressInt,
+    #[abi(address)]
+    _depool: ton_block::MsgAddressInt,
+    #[abi(uint32)]
+    _version: u32,
+}
+
 mod events {
     use super::*;
-
-    #[derive(Clone, UnpackAbiPlain, KnownParamTypePlain)]
-    pub struct NewStrategyDeployed {
-        #[abi(address)]
-        pub strategy: ton_block::MsgAddressInt,
-        #[abi(address)]
-        pub depool: ton_block::MsgAddressInt,
-        #[abi(uint32)]
-        pub version: u32,
-    }
 
     pub fn new_strategy_deployed() -> &'static ton_abi::Event {
         once!(ton_abi::Event, || {

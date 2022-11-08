@@ -8,6 +8,29 @@ macro_rules! once {
     }};
 }
 
+macro_rules! selector_variant {
+    ($ty:ident, { $($name:ident => $text:literal),*$(,)? }) => {
+        #[derive(Copy, Clone, Eq, PartialEq)]
+        enum $ty {
+            $($name),*,
+        }
+
+        impl $ty {
+            fn all() -> Vec<Self> {
+                vec![$(Self::$name),*]
+            }
+        }
+
+        impl ::std::fmt::Display for $ty {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str(match self {
+                    $(Self::$name => $text),*,
+                })
+            }
+        }
+    };
+}
+
 mod cli;
 mod config;
 mod contracts;
