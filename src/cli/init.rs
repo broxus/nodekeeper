@@ -916,10 +916,26 @@ async fn setup_adnl(
         .get_suggested_adnl_port()
         .unwrap_or(DEFAULT_ADNL_PORT);
 
+    let public_ip = public_ip::addr_v4().await;
+
     let zerostate_file_hash = *global_config.zero_state.file_hash.as_array();
 
     match (&mut app_config.adnl, node_config.get_adnl_node()?) {
-        (Some(adnl_client), Some(adnl_node)) => {
+        (Some(adnl_client), Some(mut adnl_node)) => {
+            if let Some(public_ip) = public_ip {
+                if adnl_node.ip_address.ip() != &public_ip
+                    && confirm(
+                        theme,
+                        false,
+                        "Your public IP is different from the configured one. Update?",
+                    )?
+                {
+                    adnl_node.ip_address.set_ip(public_ip);
+                    node_config.set_adnl_node(&adnl_node)?;
+                    dirs.store_node_config(node_config)?;
+                }
+            }
+
             let server_pubkey = adnl_node.overlay_pubkey()?;
             if adnl_client.server_address != adnl_node.ip_address
                 || adnl_client.server_pubkey != server_pubkey
@@ -948,7 +964,6 @@ async fn setup_adnl(
         }
         (_, None) => {
             let addr: Ipv4Addr = {
-                let public_ip = public_ip::addr_v4().await;
                 let mut input = Input::with_theme(theme);
                 if let Some(public_ip) = public_ip {
                     input.with_initial_text(public_ip.to_string());
