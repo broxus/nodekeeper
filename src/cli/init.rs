@@ -23,7 +23,7 @@ use crate::subscription::Subscription;
 use crate::util::*;
 
 const DEFAULT_CONTROL_PORT: u16 = 5031;
-const DEFAULT_LOCAL_ADNL_PORT: u16 = 5032;
+const DEFAULT_LOCAL_ADNL_PORT: u16 = 0;
 const DEFAULT_ADNL_PORT: u16 = 30100;
 const DEFAULT_NODE_REPO: &str = "https://github.com/tonlabs/ton-labs-node.git";
 const DEFAULT_NODE_DB_PATH: &str = "/var/ever/rnode";

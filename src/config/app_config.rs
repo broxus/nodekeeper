@@ -115,6 +115,10 @@ pub enum AppConfigValidation {
 }
 
 impl AppConfigValidation {
+    pub fn is_single(&self) -> bool {
+        matches!(self, Self::Single(_))
+    }
+
     pub fn as_single(&self) -> Option<&AppConfigValidationSingle> {
         match self {
             Self::Single(single) => Some(single),

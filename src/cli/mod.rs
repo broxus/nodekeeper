@@ -12,6 +12,7 @@ pub mod exporter;
 pub mod init;
 pub mod node;
 pub mod seed;
+pub mod validator;
 
 /// All-in-one node management tool with support for the upcoming stEVER
 #[derive(FromArgs)]
@@ -34,6 +35,7 @@ impl App {
 
         match self.command {
             Command::Init(cmd) => cmd.run(ctx).await,
+            Command::Validator(cmd) => cmd.run(ctx).await,
             Command::Contract(cmd) => cmd.run(ctx).await,
             Command::Exporter(cmd) => cmd.run(ctx).await,
             Command::Node(cmd) => cmd.run(ctx).await,
@@ -46,6 +48,7 @@ impl App {
 #[argh(subcommand)]
 enum Command {
     Init(init::Cmd),
+    Validator(validator::Cmd),
     Contract(contract::Cmd),
     Exporter(exporter::Cmd),
     Node(node::Cmd),

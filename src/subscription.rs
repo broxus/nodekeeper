@@ -8,6 +8,7 @@ use nekoton_abi::FunctionExt;
 use nekoton_utils::SimpleClock;
 use rustc_hash::FxHashMap;
 use tokio::sync::{mpsc, oneshot, Notify};
+use tokio_util::sync::{CancellationToken, DropGuard};
 use ton_block::{Deserializable, Serializable};
 
 use crate::node_tcp_rpc::NodeTcpRpc;
@@ -22,10 +23,13 @@ pub struct Subscription {
     subscriptions_changed: Arc<Notify>,
     mc_subscriptions: AccountSubscriptions,
     sc_subscriptions: AccountSubscriptions,
+    _cancellation: DropGuard,
 }
 
 impl Subscription {
     pub fn new(node_tcp_rpc: NodeTcpRpc, node_udp_rpc: NodeUdpRpc) -> Arc<Self> {
+        let cancellation = CancellationToken::new();
+
         let subscription = Arc::new(Self {
             node_tcp_rpc,
             node_udp_rpc,
@@ -34,9 +38,17 @@ impl Subscription {
             subscriptions_changed: Default::default(),
             mc_subscriptions: Default::default(),
             sc_subscriptions: Default::default(),
+            _cancellation: cancellation.clone().drop_guard(),
         });
 
-        tokio::spawn(walk_blocks(Arc::downgrade(&subscription)));
+        let walk_fut = walk_blocks(Arc::downgrade(&subscription));
+
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = walk_fut => {},
+                _ = cancellation.cancelled() => {}
+            }
+        });
 
         subscription
     }
@@ -54,6 +66,14 @@ impl Subscription {
         capabilities.context("failed to get node capabilities")?;
 
         Ok(())
+    }
+
+    pub fn tcp_rpc(&self) -> &NodeTcpRpc {
+        &self.node_tcp_rpc
+    }
+
+    pub fn udp_rpc(&self) -> &NodeUdpRpc {
+        &self.node_udp_rpc
     }
 
     pub async fn get_blockchain_config(&self) -> Result<ton_block::ConfigParams> {
@@ -435,7 +455,7 @@ async fn walk_blocks(subscription: Weak<Subscription>) {
                 }
             }
         }
-        // drop(subscription);
+        drop(subscription);
 
         tracing::debug!("waiting for new messages");
         signal.await;

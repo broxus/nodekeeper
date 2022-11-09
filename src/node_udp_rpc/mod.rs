@@ -12,7 +12,6 @@ use crate::config::AppConfigAdnl;
 use crate::util::BlockStuff;
 
 mod proto;
-
 #[derive(Clone)]
 pub struct NodeUdpRpc {
     inner: Arc<NodeInner>,
@@ -27,7 +26,7 @@ impl NodeUdpRpc {
 
         // Build keystore
         let keystore = adnl::Keystore::builder()
-            .with_tagged_key(rand::thread_rng().gen(), KEY_TAG)?
+            .with_tagged_key(*session_keys(), KEY_TAG)?
             .build();
 
         // Build network
@@ -224,6 +223,12 @@ impl NodeInner {
     }
 }
 
+impl Drop for NodeInner {
+    fn drop(&mut self) {
+        self.adnl.shutdown();
+    }
+}
+
 const BLOCK_TIMEOUTS: DownloaderTimeouts = DownloaderTimeouts {
     initial: 200,
     max: 1000,
@@ -250,6 +255,13 @@ impl DownloaderTimeouts {
         self.initial = std::cmp::min(self.max, (self.initial as f64 * self.multiplier) as u64);
         self.initial
     }
+}
+
+fn session_keys() -> &'static [u8; 32] {
+    use once_cell::sync::OnceCell;
+
+    static KEYS: OnceCell<[u8; 32]> = OnceCell::new();
+    KEYS.get_or_init(|| rand::thread_rng().gen())
 }
 
 const KEY_TAG: usize = 0;
