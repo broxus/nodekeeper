@@ -21,7 +21,7 @@ pub struct Cmd {
 
     /// elections offset (in seconds). 600 seconds default
     #[argh(option, default = "600")]
-    elections_offset: u64,
+    elections_offset: u32,
 
     /// min retry interval (in seconds). 10 seconds default
     #[argh(option, default = "10")]
@@ -41,7 +41,7 @@ impl Cmd {
         let mut manager = ValidationManager {
             ctx,
             max_time_diff: std::cmp::max(self.max_time_diff as i32, 5),
-            elections_offset: Duration::from_secs(self.elections_offset),
+            elections_offset: self.elections_offset,
         };
 
         self.min_retry_interval = std::cmp::max(self.min_retry_interval, 1);
@@ -68,14 +68,19 @@ impl Cmd {
 struct ValidationManager {
     ctx: CliContext,
     max_time_diff: i32,
-    elections_offset: Duration,
+    elections_offset: u32,
 }
 
 impl ValidationManager {
     async fn try_validate(&mut self) -> Result<()> {
         tracing::info!("started validation loop");
+
+        let mut interval = 0u32;
         loop {
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            if interval > 0 {
+                interval = std::cmp::max(interval, 10);
+                tokio::time::sleep(Duration::from_secs(interval as u64)).await;
+            }
 
             // Read config
             let config = self.ctx.load_config()?;
@@ -87,22 +92,55 @@ impl ValidationManager {
                 .await?;
 
             let ConfigWithId {
-                block_id: target_key_block,
+                block_id: target_block,
                 config: blockchain_config,
             } = node_tcp_rpc.get_config_all().await?;
 
             let timings = blockchain_config
                 .elector_params()
                 .context("invalid elector params")?;
+            let current_vset = blockchain_config
+                .validator_set()
+                .context("invalid validator set")?;
+            let next_vset = blockchain_config
+                .next_validator_set_present()
+                .and_then(|some| {
+                    some.then(|| blockchain_config.next_validator_set())
+                        .transpose()
+                })
+                .context("invalid validator set")?;
 
             let node_udp_rpc = NodeUdpRpc::new(config.adnl()?).await?;
             let subscription = Subscription::new(node_tcp_rpc, node_udp_rpc);
             subscription.ensure_ready().await?;
 
-            tracing::info!("target key block id: {target_key_block}");
-            let target_block = subscription.udp_rpc().get_block(&target_key_block).await?;
+            tracing::info!("target block id: {target_block}");
+            let target_block = subscription.udp_rpc().get_block(&target_block).await?;
+            let target_block_info = target_block
+                .read_brief_info()
+                .context("invalid target block")?;
 
-            tracing::info!("node is synced");
+            let timeline = Timeline::compute(&timings, &current_vset, target_block_info.gen_utime);
+            tracing::info!("timeline: {timeline}");
+
+            match timeline {
+                Timeline::BeforeElections {
+                    until_elections_start,
+                } => {
+                    interval = until_elections_start + self.elections_offset;
+                }
+                Timeline::Elections {
+                    since_elections_start,
+                    until_elections_end,
+                } => {
+                    // TODO: elect
+
+                    interval = until_elections_end;
+                }
+                Timeline::AfterElections { until_round_end } => {
+                    interval = until_round_end;
+                }
+            }
         }
     }
 
@@ -132,7 +170,64 @@ impl ValidationManager {
 
 #[derive(Debug, Clone, Copy)]
 enum Timeline {
-    BeforeElections,
-    Elections,
-    AfterElections,
+    BeforeElections {
+        until_elections_start: u32,
+    },
+    Elections {
+        since_elections_start: u32,
+        until_elections_end: u32,
+    },
+    AfterElections {
+        until_round_end: u32,
+    },
+}
+
+impl std::fmt::Display for Timeline {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BeforeElections {
+                until_elections_start,
+            } => f.write_fmt(format_args!(
+                "before elections ({until_elections_start}s remaining)"
+            )),
+            Self::Elections {
+                since_elections_start: since,
+                until_elections_end: until,
+            } => f.write_fmt(format_args!(
+                "elections (started {since}s ago, {until}s remaining)"
+            )),
+            Self::AfterElections { until_round_end } => f.write_fmt(format_args!(
+                "after elections ({until_round_end}s until new round)"
+            )),
+        }
+    }
+}
+
+impl Timeline {
+    fn compute(
+        timings: &ton_block::ConfigParam15,
+        current_vset: &ton_block::ValidatorSet,
+        now: u32,
+    ) -> Self {
+        let round_end = current_vset.utime_until();
+        let elections_start = round_end.saturating_sub(timings.elections_start_before);
+        let elections_end = round_end.saturating_sub(timings.elections_end_before);
+
+        if let Some(until_elections) = elections_start.checked_sub(now) {
+            return Self::BeforeElections {
+                until_elections_start: until_elections,
+            };
+        }
+
+        if let Some(until_end) = elections_end.checked_sub(now) {
+            return Self::Elections {
+                since_elections_start: now.saturating_sub(elections_start),
+                until_elections_end: until_end,
+            };
+        }
+
+        Self::AfterElections {
+            until_round_end: round_end.saturating_sub(now),
+        }
+    }
 }
