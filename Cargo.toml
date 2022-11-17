@@ -17,7 +17,7 @@ ctr = "0.9"
 dashmap = "5.4.0"
 dialoguer = { version = "0.10", features = ["completion"] }
 everscale-crypto = { version = "0.1.4", features = ["tl-proto"] }
-everscale-network = { version = "0.4.0-pre.0", default-features = false, features = ["rldp", "dht"] }
+everscale-network = { version = "0.4.0-pre.1", default-features = false, features = ["rldp", "dht"] }
 futures-util = "0.3"
 generic-array = "0.14"
 hex = "0.4"

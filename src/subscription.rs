@@ -105,7 +105,7 @@ impl Subscription {
         inputs: &[ton_abi::Token],
     ) -> Result<Vec<ton_abi::Token>> {
         let account = self
-            .get_account_state(&address)
+            .get_account_state(address)
             .await?
             .context("account not deployed")?;
         let output = function.run_local(&SimpleClock, account, inputs)?;
@@ -181,13 +181,15 @@ impl Subscription {
             // Remove pending message from the map before returning an error
             match subscriptions.entry(dst) {
                 dashmap::mapref::entry::Entry::Occupied(mut entry) => {
-                    if {
+                    let should_remove = {
                         let subscription = entry.get_mut();
                         subscription.pending_messages.remove(&message_hash);
                         self.subscription_count.fetch_sub(1, Ordering::Release);
                         self.subscriptions_changed.notify_waiters();
                         subscription.is_empty()
-                    } {
+                    };
+
+                    if should_remove {
                         entry.remove();
                     }
                 }

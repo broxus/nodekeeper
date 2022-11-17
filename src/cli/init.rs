@@ -290,7 +290,7 @@ async fn prepare_single_validator(
     let balance = wait_for_balance(
         "Waiting for the initial balance",
         stake_per_round as u128 * 2 + 10 * ONE_EVER,
-        || async { wallet.get_balance().await },
+        || wallet.get_balance(),
     )
     .await?;
     println!("Validator wallet balance: {}", Ever(balance));
@@ -406,7 +406,7 @@ async fn prepare_depool_validator(
         let balance = wait_for_balance(
             "Waiting for the initial validator balance",
             VALIDATOR_MIN_BALANCE + depool_initial_balance.unwrap_or_default(),
-            || async { wallet.get_balance().await },
+            || wallet.get_balance(),
         )
         .await?;
         println!("Validator wallet balance: {}", Ever(balance));
@@ -437,10 +437,11 @@ async fn prepare_depool_validator(
 
     // Handle stEver depool case
     if let DePoolType::StEver = depool_type {
+        let depool_state = depool.get_state().await?;
         let allowed_participants = depool
-            .get_allowed_participants()
-            .await
+            .get_allowed_participants(&depool_state)
             .context("failed to get allowed participant")?;
+
         if allowed_participants.len() < 2 {
             let (mut spinner, strategy) = loop {
                 match Select::with_theme(theme)
@@ -472,7 +473,7 @@ async fn prepare_depool_validator(
                         wait_for_balance(
                             "Waiting for some funds to deploy stEVER DePool strategy",
                             deployment_message.amount + ONE_EVER,
-                            || async { wallet.get_balance().await },
+                            || wallet.get_balance(),
                         )
                         .await?;
 
@@ -524,13 +525,72 @@ async fn prepare_depool_validator(
             spinner.set_message("Updating DePool info");
 
             wallet
-                .transfer_deep(depool.set_allowed_participant(strategy)?)
+                .transfer_deep(depool.set_allowed_participant(&strategy)?)
                 .await
                 .context("failed to set update DePool strategy")?;
 
             println!("DePool contract was successfully deployed!");
         }
     }
+
+    // Check validator stake
+    steps.next("Checking validator's stake");
+
+    let depool_state = depool.get_state().await?;
+    let depool_info = depool
+        .get_info(&depool_state)
+        .context("failed to get DePool info")?;
+    let rounds = depool.get_rounds(&depool_state)?;
+    let participant_info = depool
+        .get_participant_info(&depool_state, wallet.address())
+        .context("failed to get participant info")?;
+
+    if participant_info.is_some() {
+        anyhow::ensure!(rounds.len() == 4, "invalid DePool rounds");
+
+        let mut remaining = 0;
+        for next_round in rounds.into_values().skip(2) {
+            if let Some(diff) = depool_info
+                .validator_assurance
+                .checked_sub(next_round.validator_stake)
+            {
+                remaining += diff;
+            }
+        }
+
+        if remaining > 0 {
+            let remaining = std::cmp::max(ONE_EVER, remaining as u128) + ONE_EVER;
+            if !confirm(
+                theme,
+                true,
+                "Validator stake is too small. Prepare balance for the ordinary stake?",
+            )? {
+                return Ok(());
+            }
+
+            wait_for_balance("Waiting for the stake balance", remaining, || {
+                wallet.get_balance()
+            })
+            .await?;
+        }
+    } else {
+        if !confirm(
+            theme,
+            true,
+            "Validator is not a DePool participant yet. Prepare ordinary stake?",
+        )? {
+            return Ok(());
+        }
+
+        wait_for_balance(
+            "Waiting for the stake balance",
+            depool_info.validator_assurance as u128 * 2 + ONE_EVER,
+            || wallet.get_balance(),
+        )
+        .await?;
+    }
+
+    steps.next("Everything is ready for the validation!");
 
     Ok(())
 }

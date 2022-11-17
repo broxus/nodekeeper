@@ -10,7 +10,6 @@ use nekoton_utils::SimpleClock;
 use ton_abi::contract::ABI_VERSION_2_2;
 use ton_block::{Deserializable, Serializable};
 
-pub use self::common::{DePoolInfo, RoundsMap};
 use super::{InternalMessage, ONE_EVER};
 use crate::config::DePoolType;
 use crate::subscription::Subscription;
@@ -73,7 +72,7 @@ impl DePool {
     }
 
     pub async fn deploy(&self, params: DePoolInitParams) -> Result<()> {
-        let inputs = common::ConstructorInputs {
+        let inputs = ConstructorInputs {
             min_stake: params.min_stake,
             validator_assurance: params.validator_assurance,
             validator_wallet: params.owner,
@@ -147,7 +146,7 @@ impl DePool {
 
     pub fn participate_in_elections(
         &self,
-        inputs: common::ParticipateInElectionsInputs,
+        inputs: ParticipateInElectionsInputs,
     ) -> Result<InternalMessage> {
         Ok(self.internal_message_to_self(
             ONE_EVER,
@@ -157,54 +156,78 @@ impl DePool {
 
     pub fn set_allowed_participant(
         &self,
-        address: ton_block::MsgAddressInt,
+        address: &ton_block::MsgAddressInt,
     ) -> Result<InternalMessage> {
         self.ensure_stever()?;
         Ok(self.internal_message_to_self(
             ONE_EVER,
             stever_v1::set_allowed_participant()
-                .encode_internal_input(&[address.token_value().named("addr")])?,
+                .encode_internal_input(&[address.clone().token_value().named("addr")])?,
         ))
     }
 
-    pub async fn get_info(&self) -> Result<common::DePoolInfo> {
+    pub fn get_participant_info(
+        &self,
+        state: &ton_block::AccountStuff,
+        addr: &ton_block::MsgAddressInt,
+    ) -> Result<Option<ParticipantInfo>> {
+        const ERR_NOT_PARTICIPANT: i32 = 116;
+
+        let result = match self.ty {
+            DePoolType::DefaultV3 => common::get_participant_info(),
+            DePoolType::StEver => stever_v1::get_participant_info(),
+        }
+        .run_local(
+            &SimpleClock,
+            state.clone(),
+            &[addr.clone().token_value().named("addr")],
+        )?;
+
+        if result.result_code == ERR_NOT_PARTICIPANT {
+            Ok(None)
+        } else {
+            Ok(Some(result.tokens.context("no outputs")?.unpack()?))
+        }
+    }
+
+    pub fn get_info(&self, state: &ton_block::AccountStuff) -> Result<DePoolInfo> {
         let info = self
-            .run_local(common::get_depool_info(), &[])
-            .await?
+            .run_local(state, common::get_depool_info(), &[])?
             .unpack()?;
         Ok(info)
     }
 
-    pub async fn get_rounds(&self) -> Result<common::RoundsMap> {
+    pub fn get_rounds(&self, state: &ton_block::AccountStuff) -> Result<RoundsMap> {
         let rounds = self
-            .run_local(common::get_rounds(), &[])
-            .await?
+            .run_local(state, common::get_rounds(), &[])?
             .unpack_first()?;
         Ok(rounds)
     }
 
-    pub async fn get_allowed_participants(&self) -> Result<Vec<ton_block::MsgAddressInt>> {
+    pub fn get_allowed_participants(
+        &self,
+        state: &ton_block::AccountStuff,
+    ) -> Result<Vec<ton_block::MsgAddressInt>> {
         self.ensure_stever()?;
         let addresses: stever_v1::ParticipantsMap = self
-            .run_local(stever_v1::allowed_participants(), &[])
-            .await?
+            .run_local(state, stever_v1::allowed_participants(), &[])?
             .unpack_first()?;
         Ok(addresses.into_keys().collect())
     }
 
-    async fn run_local(
+    fn run_local(
         &self,
+        state: &ton_block::AccountStuff,
         function: &ton_abi::Function,
         inputs: &[ton_abi::Token],
     ) -> Result<Vec<ton_abi::Token>> {
-        let account = self.get_state().await?;
         function
-            .run_local(&SimpleClock, account, inputs)?
+            .run_local(&SimpleClock, state.clone(), inputs)?
             .tokens
             .context("no outputs")
     }
 
-    async fn get_state(&self) -> Result<ton_block::AccountStuff> {
+    pub async fn get_state(&self) -> Result<ton_block::AccountStuff> {
         self.subscription
             .get_account_state(&self.address)
             .await?
@@ -300,22 +323,180 @@ impl_getters!(DePoolType, depool_tvc, proxy_code, {
     StEver => ("./stever/DePool.tvc", "./stever/DePoolProxy.code"),
 });
 
+#[derive(Clone, PackAbiPlain, KnownParamTypePlain)]
+struct ConstructorInputs {
+    #[abi(uint64)]
+    min_stake: u64,
+    #[abi(uint64)]
+    validator_assurance: u64,
+    #[abi(cell)]
+    proxy_code: ton_types::Cell,
+    #[abi(address)]
+    validator_wallet: ton_block::MsgAddressInt,
+    #[abi(uint8)]
+    participant_reward_fraction: u8,
+}
+
+#[derive(Clone, PackAbiPlain, KnownParamTypePlain)]
+pub struct ParticipateInElectionsInputs {
+    #[abi(uint64)]
+    pub query_id: u64,
+    #[abi(uint256)]
+    pub validator_key: ton_types::UInt256,
+    #[abi(uint32)]
+    pub stake_at: u32,
+    #[abi(uint32)]
+    pub max_factor: u32,
+    #[abi(uint256)]
+    pub adnl_addr: ton_types::UInt256,
+    #[abi(bytes)]
+    pub signature: Vec<u8>,
+}
+
+#[derive(Debug, Clone, UnpackAbiPlain, KnownParamTypePlain)]
+pub struct ParticipantInfo {
+    #[abi(uint64)]
+    pub total: u64,
+    #[abi(uint64)]
+    pub withdraw_value: u64,
+    #[abi(bool)]
+    pub reinvest: bool,
+    #[abi(uint64)]
+    pub reward: u64,
+    #[abi]
+    pub stakes: BTreeMap<u64, u64>,
+    #[abi]
+    pub vestings: BTreeMap<u64, ComplexStake>,
+    #[abi]
+    pub locks: BTreeMap<u64, ComplexStake>,
+    #[abi(address)]
+    pub vesting_donor: ton_block::MsgAddressInt,
+    #[abi(address)]
+    pub lock_donor: ton_block::MsgAddressInt,
+}
+
+#[derive(Debug, Clone, UnpackAbi, KnownParamType)]
+pub struct ComplexStake {
+    #[abi(uint64)]
+    pub remaining_amount: u64,
+    #[abi(uint64)]
+    pub last_withdrawal_time: u64,
+    #[abi(uint32)]
+    pub withdrawal_period: u32,
+    #[abi(uint64)]
+    pub withdrawal_value: u64,
+    #[abi(address)]
+    pub owner: ton_block::MsgAddressInt,
+}
+
+#[derive(Clone, UnpackAbiPlain, KnownParamTypePlain)]
+pub struct DePoolInfo {
+    #[abi(bool)]
+    pub pool_closed: bool,
+    #[abi(uint64)]
+    pub min_stake: u64,
+    #[abi(uint64)]
+    pub validator_assurance: u64,
+    #[abi(uint8)]
+    pub participant_reward_fraction: u8,
+    #[abi(uint8)]
+    pub validator_reward_fraction: u8,
+    #[abi(uint64)]
+    pub balance_threshold: u64,
+    #[abi(address)]
+    pub validator_wallet: ton_block::MsgAddressInt,
+    #[abi(array)]
+    pub proxies: Vec<ton_block::MsgAddressInt>,
+    #[abi(uint64)]
+    pub stake_fee: u64,
+    #[abi(uint64)]
+    pub return_or_reinvest_fee: u64,
+    #[abi(uint64)]
+    pub proxy_fee: u64,
+}
+
+#[derive(UnpackAbi, KnownParamType)]
+pub struct Round {
+    #[abi(uint64)]
+    pub id: u64,
+    #[abi(uint32)]
+    pub supposed_elected_at: u32,
+    #[abi(uint32)]
+    pub unfreeze: u32,
+    #[abi(uint32)]
+    pub stake_held_for: u32,
+    #[abi(uint256)]
+    pub vset_hash_in_election_phase: ton_types::UInt256,
+    #[abi]
+    pub step: RoundStep,
+    #[abi]
+    pub completion_reason: CompletionReason,
+    #[abi(uint64)]
+    pub stake: u64,
+    #[abi(uint64)]
+    pub recovered_stake: u64,
+    #[abi(uint64)]
+    pub unused: u64,
+    #[abi(bool)]
+    pub is_validator_stake_completed: bool,
+    #[abi(uint64)]
+    pub participant_reward: u64,
+    #[abi(uint32)]
+    pub participant_qty: u32,
+    #[abi(uint64)]
+    pub validator_stake: u64,
+    #[abi(uint64)]
+    pub validator_remaining_stake: u64,
+    #[abi(uint64)]
+    pub handled_stakes_and_rewards: u64,
+}
+
+pub type RoundsMap = BTreeMap<u64, Round>;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, UnpackAbi, KnownParamType)]
+pub enum RoundStep {
+    /// Receiving a half of vesting/lock stake from participants
+    PrePooling = 0,
+    /// Receiving stakes from participants
+    Pooling = 1,
+    /// Waiting for the election request from the validator
+    WaitingValidatorRequest = 2,
+    /// Stake has been sent to the elector. Waiting for the answer from the elector
+    WaitingIfStakeAccepted = 3,
+    /// Elector has accepted round stake. Validator is a candidate.
+    /// Waiting validation start to know if we won the elections
+    WaitingValidationStart = 4,
+    /// DePool has tried to recover stake during validation period to know
+    /// if we won the elections.  Waiting for elector answer
+    WaitingIfValidatorWinElections = 5,
+    /// If CompletionReason!=Undefined, then the round is completed and we are waiting for
+    /// return/reinvest funds after the next round. Otherwise if validator won the elections,
+    /// waiting for the end of unfreeze period
+    WaitingUnfreeze = 6,
+    /// Unfreeze period has been ended.
+    /// Requested recovering stake from the elector. Waiting for the answer
+    WaitingReward = 7,
+    /// Returning or reinvesting participant stakes because round is completed
+    Completing = 8,
+    /// All round states are returned or reinvested
+    Completed = 9,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, UnpackAbi, KnownParamType)]
+pub enum CompletionReason {
+    Undefined = 0,
+    PoolClosed = 1,
+    FakeRound = 2,
+    ValidatorStakeIsTooSmall = 3,
+    StakeIsRejectedByElector = 4,
+    RewardIsReceived = 5,
+    ElectionsAreLost = 6,
+    ValidatorIsPunished = 7,
+    NoValidatorRequest = 8,
+}
+
 mod common {
     use super::*;
-
-    #[derive(Clone, PackAbiPlain, KnownParamTypePlain)]
-    pub struct ConstructorInputs {
-        #[abi(uint64)]
-        pub min_stake: u64,
-        #[abi(uint64)]
-        pub validator_assurance: u64,
-        #[abi(cell)]
-        pub proxy_code: ton_types::Cell,
-        #[abi(address)]
-        pub validator_wallet: ton_block::MsgAddressInt,
-        #[abi(uint8)]
-        pub participant_reward_fraction: u8,
-    }
 
     pub fn constructor() -> &'static ton_abi::Function {
         once!(ton_abi::Function, || {
@@ -333,22 +514,6 @@ mod common {
                 .input("stake", u64::param_type())
                 .build()
         })
-    }
-
-    #[derive(Clone, PackAbiPlain, KnownParamTypePlain)]
-    pub struct ParticipateInElectionsInputs {
-        #[abi(uint64)]
-        query_id: u64,
-        #[abi(uint256)]
-        validator_key: ton_types::UInt256,
-        #[abi(uint32)]
-        stake_at: u32,
-        #[abi(uint32)]
-        max_factor: u32,
-        #[abi(uint256)]
-        adnl_addr: ton_types::UInt256,
-        #[abi(bytes)]
-        signature: Vec<u8>,
     }
 
     pub fn participate_in_elections() -> &'static ton_abi::Function {
@@ -372,30 +537,16 @@ mod common {
         })
     }
 
-    #[derive(Clone, UnpackAbiPlain, KnownParamTypePlain)]
-    pub struct DePoolInfo {
-        #[abi(bool)]
-        pub pool_closed: bool,
-        #[abi(uint64)]
-        pub min_stake: u64,
-        #[abi(uint64)]
-        pub validator_assurance: u64,
-        #[abi(uint8)]
-        pub participant_reward_fraction: u8,
-        #[abi(uint8)]
-        pub validator_reward_fraction: u8,
-        #[abi(uint64)]
-        pub balance_threshold: u64,
-        #[abi(address)]
-        pub validator_wallet: ton_block::MsgAddressInt,
-        #[abi(array)]
-        pub proxies: Vec<ton_block::MsgAddressInt>,
-        #[abi(uint64)]
-        pub stake_fee: u64,
-        #[abi(uint64)]
-        pub return_or_reinvest_fee: u64,
-        #[abi(uint64)]
-        pub proxy_fee: u64,
+    pub fn get_participant_info() -> &'static ton_abi::Function {
+        once!(ton_abi::Function, || {
+            FunctionBuilder::new("getParticipantInfo")
+                .time_header()
+                .expire_header()
+                .abi_version(ton_abi::contract::ABI_VERSION_2_0)
+                .input("addr", ton_block::MsgAddressInt::param_type())
+                .outputs(ParticipantInfo::param_type())
+                .build()
+        })
     }
 
     pub fn get_depool_info() -> &'static ton_abi::Function {
@@ -407,86 +558,6 @@ mod common {
                 .build()
         })
     }
-
-    #[derive(Copy, Clone, Debug, PartialEq, Eq, UnpackAbi, KnownParamType)]
-    pub enum RoundStep {
-        /// Receiving a half of vesting/lock stake from participants
-        PrePooling = 0,
-        /// Receiving stakes from participants
-        Pooling = 1,
-        /// Waiting for the election request from the validator
-        WaitingValidatorRequest = 2,
-        /// Stake has been sent to the elector. Waiting for the answer from the elector
-        WaitingIfStakeAccepted = 3,
-        /// Elector has accepted round stake. Validator is a candidate.
-        /// Waiting validation start to know if we won the elections
-        WaitingValidationStart = 4,
-        /// DePool has tried to recover stake during validation period to know
-        /// if we won the elections.  Waiting for elector answer
-        WaitingIfValidatorWinElections = 5,
-        /// If CompletionReason!=Undefined, then the round is completed and we are waiting for
-        /// return/reinvest funds after the next round. Otherwise if validator won the elections,
-        /// waiting for the end of unfreeze period
-        WaitingUnfreeze = 6,
-        /// Unfreeze period has been ended.
-        /// Requested recovering stake from the elector. Waiting for the answer
-        WaitingReward = 7,
-        /// Returning or reinvesting participant stakes because round is completed
-        Completing = 8,
-        /// All round states are returned or reinvested
-        Completed = 9,
-    }
-
-    #[derive(Copy, Clone, Debug, PartialEq, Eq, UnpackAbi, KnownParamType)]
-    pub enum CompletionReason {
-        Undefined = 0,
-        PoolClosed = 1,
-        FakeRound = 2,
-        ValidatorStakeIsTooSmall = 3,
-        StakeIsRejectedByElector = 4,
-        RewardIsReceived = 5,
-        ElectionsAreLost = 6,
-        ValidatorIsPunished = 7,
-        NoValidatorRequest = 8,
-    }
-
-    #[derive(UnpackAbi, KnownParamType)]
-    pub struct Round {
-        #[abi(uint64)]
-        pub id: u64,
-        #[abi(uint32)]
-        pub supposed_elected_at: u32,
-        #[abi(uint32)]
-        pub unfreeze: u32,
-        #[abi(uint32)]
-        pub stake_held_for: u32,
-        #[abi(uint256)]
-        pub vset_hash_in_election_phase: ton_types::UInt256,
-        #[abi]
-        pub step: RoundStep,
-        #[abi]
-        pub completion_reason: CompletionReason,
-        #[abi(uint64)]
-        pub stake: u64,
-        #[abi(uint64)]
-        pub recovered_stake: u64,
-        #[abi(uint64)]
-        pub unused: u64,
-        #[abi(bool)]
-        pub is_validator_stake_completed: bool,
-        #[abi(uint64)]
-        pub participant_reward: u64,
-        #[abi(uint32)]
-        pub participant_qty: u32,
-        #[abi(uint64)]
-        pub validator_stake: u64,
-        #[abi(uint64)]
-        pub validator_remaining_stake: u64,
-        #[abi(uint64)]
-        pub handled_stakes_and_rewards: u64,
-    }
-
-    pub type RoundsMap = BTreeMap<u64, Round>;
 
     pub fn get_rounds() -> &'static ton_abi::Function {
         once!(ton_abi::Function, || {
@@ -501,6 +572,18 @@ mod common {
 
 mod stever_v1 {
     use super::*;
+
+    pub fn get_participant_info() -> &'static ton_abi::Function {
+        once!(ton_abi::Function, || {
+            FunctionBuilder::new("getParticipantInfo")
+                .abi_version(ton_abi::contract::ABI_VERSION_2_2)
+                .time_header()
+                .expire_header()
+                .input("addr", ton_block::MsgAddressInt::param_type())
+                .outputs(ParticipantInfo::param_type())
+                .build()
+        })
+    }
 
     pub fn set_allowed_participant() -> &'static ton_abi::Function {
         once!(ton_abi::Function, || {

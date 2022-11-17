@@ -67,7 +67,7 @@ impl NodeUdpRpc {
             adnl::NewPeerContext::Dht,
             &local_id,
             &peer_id,
-            config.server_address.into(),
+            config.server_address,
             peer_id_full,
         )
         .context("failed to add server as a peer")?;

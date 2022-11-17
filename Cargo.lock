@@ -150,9 +150,9 @@ checksum = "ec8a7b6a70fde80372154c65702f00a0f56f3e1c36abbc6c440484be248856db"
 
 [[package]]
 name = "cc"
-version = "1.0.75"
+version = "1.0.76"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41ca34107f97baef6cfb231b32f36115781856b8f8208e8c580e0bcaea374842"
+checksum = "76a284da2e6fe2092f2353e51713435363112dfd60030e22add80be333fb928f"
 dependencies = [
  "jobserver",
 ]
@@ -489,9 +489,9 @@ dependencies = [
 
 [[package]]
 name = "everscale-network"
-version = "0.4.0-pre.0"
+version = "0.4.0-pre.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53c363727dd5375b1ecb6b30ae6a5d686516670987943febc4125c81c6a4098c"
+checksum = "441fd0519628e8515c1dd42b452fc62163c1477412076873f4eddafb43ce867f"
 dependencies = [
  "aes",
  "anyhow",
@@ -892,12 +892,13 @@ dependencies = [
 
 [[package]]
 name = "indicatif"
-version = "0.17.1"
+version = "0.17.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfddc9561e8baf264e0e45e197fd7696320026eb10a8180340debc27b18f535b"
+checksum = "4295cbb7573c16d310e99e713cf9e75101eb190ab31fccd35f2d2691b4352b19"
 dependencies = [
  "console",
  "number_prefix",
+ "portable-atomic",
  "unicode-width",
 ]
 
@@ -1081,7 +1082,7 @@ dependencies = [
 [[package]]
 name = "nekoton-abi"
 version = "0.11.0"
-source = "git+https://github.com/broxus/nekoton.git#74f5634a6abcdd14f3ed00dccb297700488d8475"
+source = "git+https://github.com/broxus/nekoton.git#a3adb3689b53f2acc5e4cf5e4eb7d2a49f318c84"
 dependencies = [
  "anyhow",
  "base64",
@@ -1107,7 +1108,7 @@ dependencies = [
 [[package]]
 name = "nekoton-derive"
 version = "0.11.0"
-source = "git+https://github.com/broxus/nekoton.git#74f5634a6abcdd14f3ed00dccb297700488d8475"
+source = "git+https://github.com/broxus/nekoton.git#a3adb3689b53f2acc5e4cf5e4eb7d2a49f318c84"
 dependencies = [
  "either",
  "proc-macro2",
@@ -1118,7 +1119,7 @@ dependencies = [
 [[package]]
 name = "nekoton-utils"
 version = "0.11.0"
-source = "git+https://github.com/broxus/nekoton.git#74f5634a6abcdd14f3ed00dccb297700488d8475"
+source = "git+https://github.com/broxus/nekoton.git#a3adb3689b53f2acc5e4cf5e4eb7d2a49f318c84"
 dependencies = [
  "anyhow",
  "base64",
@@ -1470,6 +1471,12 @@ dependencies = [
  "serde",
  "tokio",
 ]
+
+[[package]]
+name = "portable-atomic"
+version = "0.3.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15eb2c6e362923af47e13c23ca5afb859e83d54452c55b0b9ac763b8f7c1ac16"
 
 [[package]]
 name = "ppv-lite86"
