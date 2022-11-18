@@ -111,26 +111,12 @@ pub struct AppConfigAdnl {
 #[serde(deny_unknown_fields, rename_all = "lowercase", tag = "type")]
 pub enum AppConfigValidation {
     Single(AppConfigValidationSingle),
-    DePool(AppConfigValidationDePool),
+    DePool(Box<AppConfigValidationDePool>),
 }
 
 impl AppConfigValidation {
     pub fn is_single(&self) -> bool {
         matches!(self, Self::Single(_))
-    }
-
-    pub fn as_single(&self) -> Option<&AppConfigValidationSingle> {
-        match self {
-            Self::Single(single) => Some(single),
-            Self::DePool(_) => None,
-        }
-    }
-
-    pub fn as_depool(&self) -> Option<&AppConfigValidationDePool> {
-        match self {
-            Self::Single(_) => None,
-            Self::DePool(depool) => Some(depool),
-        }
     }
 }
 

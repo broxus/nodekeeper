@@ -39,10 +39,8 @@ impl Wallet {
         Ok(account.map(|state| state.storage.balance.grams.0))
     }
 
-    pub async fn transfer_deep(
-        &self,
-        internal_message: InternalMessage,
-    ) -> Result<TransactionWithHash> {
+    /// Sends the internal message to the recipient, returns the destination transaction
+    pub async fn call(&self, internal_message: InternalMessage) -> Result<TransactionWithHash> {
         let dst = internal_message.dst.clone();
         let mut dst_transactions = self.subscription.subscribe(&dst);
 
@@ -78,6 +76,7 @@ impl Wallet {
         anyhow::bail!("destination transaction was not found")
     }
 
+    /// Sends the internal message to the recipient, returns the source transaction
     pub async fn transfer(&self, internal_message: InternalMessage) -> Result<TransactionWithHash> {
         let account = self.get_account_state().await?;
 

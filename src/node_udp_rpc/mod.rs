@@ -1,4 +1,4 @@
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::SocketAddrV4;
 use std::sync::Arc;
 use std::time::Duration;
 
