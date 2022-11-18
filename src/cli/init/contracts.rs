@@ -478,23 +478,32 @@ async fn prepare_depool_validator(
             .await?;
         }
     } else {
-        if !confirm(
-            theme,
-            true,
-            "Validator is not a DePool participant yet. Prepare ordinary stake?",
-        )? {
-            return Ok(());
-        }
+        let target_balance = depool_info.validator_assurance as u128 * 2 + ONE_EVER;
 
-        // Toupup validator wallet
-        wait_for_balance(
-            "Waiting for the stake balance",
-            depool_info.validator_assurance as u128 * 2 + ONE_EVER,
-            || wallet.get_balance(),
-        )
-        .await?;
+        // Check if validator balance is enough for the validator assurance
+        let validator_balance = wallet
+            .get_balance()
+            .await
+            .context("failed to get validator wallet balance")?;
+
+        if !matches!(validator_balance, Some(balance) if balance >= target_balance) {
+            if !confirm(
+                theme,
+                true,
+                "Validator is not a DePool participant yet. Prepare ordinary stake?",
+            )? {
+                return Ok(());
+            }
+
+            // Toupup validator wallet
+            wait_for_balance("Waiting for the stake balance", target_balance, || {
+                wallet.get_balance()
+            })
+            .await?;
+        }
     }
 
+    // Done
     steps.next("Everything is ready for the validation!");
 
     Ok(())

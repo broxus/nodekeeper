@@ -13,7 +13,7 @@ use crate::cli::{CliContext, ProjectDirs, VALIDATOR_MANAGER_SERVICE, VALIDATOR_S
 use crate::util::*;
 
 #[derive(FromArgs)]
-/// Creates systemd services (`ever-validator` and `ever-validator-manager`)
+/// Creates systemd services
 #[argh(subcommand, name = "systemd")]
 pub struct Cmd {}
 

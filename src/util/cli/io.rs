@@ -7,6 +7,21 @@ use dialoguer::theme::Theme;
 use tokio::process::Command;
 use ton_block::Deserializable;
 
+pub async fn exec(command: &mut Command) -> Result<()> {
+    let mut child = command.spawn()?;
+
+    let status = child
+        .wait()
+        .await
+        .context("child process encountered an error")?;
+
+    anyhow::ensure!(
+        status.success(),
+        "child process failed with exit code {status}"
+    );
+    Ok(())
+}
+
 pub struct Ever<T>(pub T);
 
 impl<T: Into<u128> + Copy> std::fmt::Display for Ever<T> {
@@ -68,15 +83,6 @@ impl FromStr for OptionalAddressInput {
         let AddressInput(addr) = s.parse()?;
         Ok(Self(Some(addr)))
     }
-}
-
-pub fn print_output<T: std::fmt::Display>(arg: T) {
-    if console::user_attended() {
-        writeln!(std::io::stdout(), "{arg:#}")
-    } else {
-        write!(std::io::stdout(), "{arg}")
-    }
-    .unwrap()
 }
 
 pub fn parse_contract_abi<P>(path: P) -> Result<ton_abi::Contract>
@@ -156,9 +162,18 @@ where
         .interact()
 }
 
+pub fn print_output<T: std::fmt::Display>(arg: T) {
+    if console::user_attended() {
+        writeln!(std::io::stdout(), "{arg:#}")
+    } else {
+        write!(std::io::stdout(), "{arg}")
+    }
+    .unwrap()
+}
+
 pub fn print_important_value(title: impl std::fmt::Display, value: impl std::fmt::Display) {
     println!(
-        "{}\n{}\n",
+        "{}\n{}",
         console::style(format!("{title}:")).green().bold(),
         console::style(value).bold()
     );
@@ -172,21 +187,6 @@ pub fn note(text: impl std::fmt::Display) -> impl std::fmt::Display {
     console::style(format!("({text})")).dim()
 }
 
-pub async fn exec(command: &mut Command) -> Result<()> {
-    let mut child = command.spawn()?;
-
-    let status = child
-        .wait()
-        .await
-        .context("child process encountered an error")?;
-
-    anyhow::ensure!(
-        status.success(),
-        "child process failed with exit code {status}"
-    );
-    Ok(())
-}
-
 pub struct Steps {
     total: usize,
     current: usize,
@@ -198,8 +198,9 @@ impl Steps {
     }
 
     pub fn next(&mut self, text: impl std::fmt::Display) {
+        let newline = if self.current == 0 { "" } else { "\n" };
         println!(
-            "{} {text}",
+            "{newline}{} {text}",
             console::style(format!("[{}/{}]", self.current, self.total))
                 .bold()
                 .dim()
