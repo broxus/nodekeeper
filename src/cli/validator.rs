@@ -1,15 +1,17 @@
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use argh::FromArgs;
-use nekoton_abi::{KnownParamType, KnownParamTypePlain, MaybeRef, UnpackAbi, UnpackAbiPlain};
 
+use super::{CliContext, ProjectDirs};
+use crate::config::{AppConfigValidation, StoredKeys};
+use crate::contracts::{elector, wallet, InternalMessage, ONE_EVER};
 use crate::node_tcp_rpc::{ConfigWithId, NodeStats, NodeTcpRpc, RunningStats};
 use crate::node_udp_rpc::NodeUdpRpc;
 use crate::subscription::Subscription;
-
-use super::CliContext;
+use crate::util::Ever;
 
 #[derive(FromArgs)]
 /// Validation manager service
@@ -81,8 +83,11 @@ impl ValidationManager {
     async fn try_validate(&mut self) -> Result<()> {
         tracing::info!("started validation loop");
 
+        let dirs = self.ctx.dirs();
+
         let mut interval = 0u32;
         loop {
+            // Sleep with the requested interval
             if interval > 0 {
                 interval = std::cmp::max(interval, 10);
                 tokio::time::sleep(Duration::from_secs(interval as u64)).await;
@@ -92,11 +97,12 @@ impl ValidationManager {
             let config = self.ctx.load_config()?;
             let validation = config.validation()?;
 
-            // Prepare subscription
+            // Create tcp rpc and wait until node is synced
             let node_tcp_rpc = NodeTcpRpc::new(config.control()?).await?;
             self.wait_until_synced(&node_tcp_rpc, validation.is_single())
                 .await?;
 
+            // Get current network config params
             let ConfigWithId {
                 block_id: target_block,
                 config: blockchain_config,
@@ -119,20 +125,24 @@ impl ValidationManager {
                 })
                 .context("invalid validator set")?;
 
+            // Create subscription
             let node_udp_rpc = NodeUdpRpc::new(config.adnl()?).await?;
             let subscription = Subscription::new(node_tcp_rpc, node_udp_rpc);
             subscription.ensure_ready().await?;
 
+            // Get block with the config
             tracing::info!("target block id: {target_block}");
             let target_block = subscription.udp_rpc().get_block(&target_block).await?;
             let target_block_info = target_block
                 .read_brief_info()
                 .context("invalid target block")?;
 
+            // Compute where are we on the validation timeline
             let timeline = Timeline::compute(&timings, &current_vset, target_block_info.gen_utime);
             tracing::info!("timeline: {timeline}");
 
             let until_elections_end = match timeline {
+                // If elections were not started yet, wait for the start (with an additonal offset)
                 Timeline::BeforeElections {
                     until_elections_start,
                 } => {
@@ -140,6 +150,7 @@ impl ValidationManager {
                     interval = until_elections_start + self.elections_start_offset;
                     continue;
                 }
+                // If elections started
                 Timeline::Elections {
                     since_elections_start,
                     until_elections_end,
@@ -148,19 +159,23 @@ impl ValidationManager {
                         .elections_start_offset
                         .checked_sub(since_elections_start)
                     {
+                        // Wait a bit after elections start
                         tracing::info!("too early to participate in elections");
                         interval = offset;
                         continue;
                     } else if let Some(offset) =
                         self.elections_end_offset.checked_sub(until_elections_end)
                     {
+                        // Elections will end soon, attempts are doomed
                         tracing::info!("too late to participate in elections");
                         interval = offset;
                         continue;
                     } else {
+                        // We can participate, remember elections end timestamp
                         until_elections_end
                     }
                 }
+                // Elections were already finished, wait for the new round
                 Timeline::AfterElections { until_round_end } => {
                     tracing::info!("waiting for the new round to start");
                     interval = until_round_end;
@@ -168,18 +183,84 @@ impl ValidationManager {
                 }
             };
 
-            // PARTICIATE
-            let elector_data = subscription.get_elector_data(elector_address).await?;
-            let election_id = match elector_data.current_election.0 {
-                Some(current_election) => current_election.elect_at,
-                None => {
-                    tracing::info!("no current elections in the elector state");
-                    continue;
-                }
+            // Participate in elections
+            let elector = elector::Elector::new(elector_address, subscription.clone());
+            let elector_data = elector
+                .get_data()
+                .await
+                .context("failed to get elector data")?;
+
+            // Get current election id
+            let Some(election_id) = elector_data.election_id() else {
+                tracing::info!("no current elections in the elector state");
+                continue;
             };
             tracing::info!("election id: {election_id}");
 
-            // TODO: elect
+            // Prepare deadline future
+            let deadline = tokio::time::sleep(Duration::from_secs(
+                until_elections_end.saturating_sub(self.elections_end_offset) as u64,
+            ));
+
+            let keypair = dirs.load_validator_keys()?;
+            match &validation {
+                AppConfigValidation::Single(validation) => {
+                    let wallet = wallet::Wallet::new(-1, keypair, subscription.clone())?;
+
+                    if let Some(stake) = elector_data.has_unfrozen_stake(&validation.address) {
+                        // Send recover stake message
+                        tracing::info!(stake = stake.0, "recovering stake");
+                        wallet
+                            .call(elector.recover_stake()?)
+                            .await
+                            .context("failed to recover stake")?;
+                    }
+
+                    let elect = async {
+                        let target_balance = validation.stake_per_round as u128 + 2 * ONE_EVER;
+
+                        let balance = wait_for_balance(target_balance, || wallet.get_balance())
+                            .await
+                            .context("failed to fetch validator balance")?;
+                        tracing::info!(balance = %Ever(balance), "fetched wallet balance");
+
+                        let payload = elector
+                            .participate_in_elections(
+                                election_id,
+                                &validation.address,
+                                validation.stake_factor,
+                                &timings,
+                            )
+                            .await
+                            .context("failed to prepare new validator key")?;
+                        tracing::info!("generated election payload");
+
+                        wallet
+                            .call(InternalMessage {
+                                dst: elector.address().clone(),
+                                amount: validation.stake_per_round as u128 + ONE_EVER,
+                                payload,
+                            })
+                            .await
+                            .context("failed to participate in elections")?;
+                        tracing::info!("sent validator stake");
+
+                        Ok::<_, anyhow::Error>(())
+                    };
+
+                    tokio::select! {
+                        _ = deadline => {
+                            tracing::info!("elections deadline reached");
+                            continue
+                        }
+                        res = elect => res?,
+                    };
+                }
+                AppConfigValidation::DePool(_validation) => {
+                    tracing::info!("depool validator");
+                    // wallet::Wallet::new(0, keypair, subscription.clone())?;
+                }
+            };
 
             interval = until_elections_end;
         }
@@ -206,40 +287,6 @@ impl ValidationManager {
             }
             tokio::time::sleep(interval).await;
         }
-    }
-}
-
-impl Subscription {
-    async fn get_elector_data(
-        &self,
-        elector_address: ton_types::UInt256,
-    ) -> Result<PartialElectorData> {
-        let elector = ton_block::MsgAddressInt::AddrStd(ton_block::MsgAddrStd {
-            workchain_id: -1,
-            address: elector_address.into(),
-            ..Default::default()
-        });
-
-        let elector_state = self
-            .get_account_state(&elector)
-            .await
-            .context("failed to get elector state")?
-            .context("elector not found")?;
-
-        let ton_block::AccountState::AccountActive { state_init } = elector_state.storage.state else {
-            anyhow::bail!("elector account is not active");
-        };
-        let data = state_init.data.context("elector data is empty")?;
-        let state: PartialElectorData = ton_abi::TokenValue::decode_params(
-            elector_data_params(),
-            data.into(),
-            &ton_abi::contract::ABI_VERSION_2_1,
-            true,
-        )
-        .context("failed to parse elector data")?
-        .unpack()?;
-
-        Ok(state)
     }
 }
 
@@ -307,46 +354,24 @@ impl Timeline {
     }
 }
 
-fn elector_data_params() -> &'static [ton_abi::Param] {
-    once!(Vec<ton_abi::Param>, || PartialElectorData::param_type())
+async fn wait_for_balance<F>(target: u128, mut f: impl FnMut() -> F) -> Result<u128>
+where
+    F: Future<Output = Result<Option<u128>>>,
+{
+    let interval = std::time::Duration::from_secs(1);
+    loop {
+        match f().await?.unwrap_or_default() {
+            balance if balance >= target => break Ok(balance),
+            balance => tracing::debug!(balance, target, "account balance not enough"),
+        }
+        tokio::time::sleep(interval).await;
+    }
 }
 
-#[derive(Debug, UnpackAbiPlain, KnownParamTypePlain)]
-struct PartialElectorData {
-    #[abi]
-    current_election: MaybeRef<CurrentElectionData>,
-    #[abi]
-    credits: BTreeMap<ton_types::UInt256, ton_block::Grams>,
-}
-
-#[derive(Debug, UnpackAbi, KnownParamType)]
-struct CurrentElectionData {
-    #[abi(uint32)]
-    elect_at: u32,
-    #[abi(uint32)]
-    elect_close: u32,
-    #[abi(gram)]
-    min_stake: u128,
-    #[abi(gram)]
-    total_stake: u128,
-    #[abi]
-    members: BTreeMap<ton_types::UInt256, ElectionMember>,
-    #[abi(bool)]
-    failed: bool,
-    #[abi(bool)]
-    finished: bool,
-}
-
-#[derive(Debug, UnpackAbi, KnownParamType)]
-struct ElectionMember {
-    #[abi(gram)]
-    msg_value: u64,
-    #[abi(uint32)]
-    created_at: u32,
-    #[abi(uint32)]
-    max_factor: u32,
-    #[abi(uint256)]
-    src_addr: ton_types::UInt256,
-    #[abi(uint256)]
-    adnl_addr: ton_types::UInt256,
+impl ProjectDirs {
+    fn load_validator_keys(&self) -> Result<ed25519_dalek::Keypair> {
+        let keys = StoredKeys::load(&self.validator_keys)
+            .context("failed to load validator wallet keys")?;
+        Ok(keys.as_keypair())
+    }
 }

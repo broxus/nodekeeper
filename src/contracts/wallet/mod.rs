@@ -45,6 +45,7 @@ impl Wallet {
         let mut dst_transactions = self.subscription.subscribe(&dst);
 
         let src_tx = self.transfer(internal_message).await?;
+        tracing::debug!(source_tx_hash = ?src_tx.hash, "message sent from wallet");
 
         let mut out_msg_hash = None;
         src_tx
@@ -68,6 +69,7 @@ impl Wallet {
         let out_msg_hash = out_msg_hash.context("outgoing message not found")?;
 
         while let Some(tx) = dst_transactions.recv().await {
+            tracing::debug!(source_tx_hash = ?src_tx.hash, tx_hash = ?tx.hash, "new transaction found");
             let Some(msg) = tx.data.in_msg_cell() else { continue; };
             if msg.repr_hash() == out_msg_hash {
                 return Ok(tx);

@@ -11,8 +11,8 @@ use crate::subscription::Subscription;
 use crate::util::TransactionWithHash;
 
 pub struct StrategyFactory {
-    pub address: ton_block::MsgAddressInt,
-    pub subscription: Arc<Subscription>,
+    address: ton_block::MsgAddressInt,
+    subscription: Arc<Subscription>,
 }
 
 impl StrategyFactory {

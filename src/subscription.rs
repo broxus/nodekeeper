@@ -134,16 +134,16 @@ impl Subscription {
         expire_at: u32,
     ) -> Result<Option<TransactionWithHash>> {
         // Prepare dst address
-        let dst = match message.ext_in_header() {
+        let raw_dst = match message.ext_in_header() {
             Some(header) => header.dst.clone(),
             None => anyhow::bail!("expected external message"),
         };
-        let (workchain, dst) = split_address(&dst)?;
+        let (workchain, dst) = split_address(&raw_dst)?;
 
         // Get message hash
-        let message_cell = message.serialize()?;
-        let message_hash = message_cell.repr_hash();
-        let data = ton_types::serialize_toc(&message_cell)?;
+        let msg_cell = message.serialize()?;
+        let msg_hash = msg_cell.repr_hash();
+        let data = ton_types::serialize_toc(&msg_cell)?;
 
         // Find pending messages map
         let subscriptions = match workchain {
@@ -156,7 +156,7 @@ impl Subscription {
         let rx = {
             let mut subscription = subscriptions.entry(dst).or_default();
 
-            let rx = match subscription.pending_messages.entry(message_hash) {
+            let rx = match subscription.pending_messages.entry(msg_hash) {
                 hash_map::Entry::Vacant(entry) => {
                     let (tx, rx) = oneshot::channel();
                     entry.insert(PendingMessage {
@@ -183,7 +183,7 @@ impl Subscription {
                 dashmap::mapref::entry::Entry::Occupied(mut entry) => {
                     let should_remove = {
                         let subscription = entry.get_mut();
-                        subscription.pending_messages.remove(&message_hash);
+                        subscription.pending_messages.remove(&msg_hash);
                         self.subscription_count.fetch_sub(1, Ordering::Release);
                         self.subscriptions_changed.notify_waiters();
                         subscription.is_empty()
@@ -199,9 +199,29 @@ impl Subscription {
             };
             return Err(e);
         }
+        tracing::debug!(dst = %raw_dst, ?msg_hash, "external message broadcasted");
 
         // Wait for the message execution
-        rx.await.map_err(From::from)
+        let tx = rx.await?;
+        match &tx {
+            Some(tx) => {
+                tracing::debug!(
+                    dst = %raw_dst,
+                    ?msg_hash,
+                    tx_hash = ?tx.hash,
+                    "external message delivered"
+                );
+            }
+            None => {
+                tracing::warn!(
+                    dst = %raw_dst,
+                    ?msg_hash,
+                    "external message expired"
+                );
+            }
+        }
+
+        Ok(tx)
     }
 
     pub fn subscribe(&self, address: &ton_block::MsgAddressInt) -> TransactionsRx {

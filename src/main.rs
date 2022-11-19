@@ -43,7 +43,11 @@ mod util;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    if console::user_attended() {
+        tracing_subscriber::fmt::init();
+    } else {
+        tracing_subscriber::fmt::fmt().without_time().init();
+    }
 
     argh::from_env::<cli::App>().run().await
 }
