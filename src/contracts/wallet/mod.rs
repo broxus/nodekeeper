@@ -5,7 +5,7 @@ use nekoton_abi::{FunctionBuilder, KnownParamTypePlain, PackAbiPlain};
 use ton_abi::contract::ABI_VERSION_2_3;
 use ton_block::{Deserializable, GetRepresentationHash};
 
-use super::{InternalMessage, ONE_EVER};
+use super::InternalMessage;
 use crate::subscription::Subscription;
 use crate::util::{make_default_headers, TransactionWithHash};
 
@@ -146,14 +146,6 @@ impl Wallet {
             .context("failed to get account state")
     }
 }
-
-pub struct Gift {
-    pub amount: u64,
-    pub dest: ton_block::MsgAddressInt,
-    pub payload: ton_types::Cell,
-}
-
-const BALANCE_OFFSET: u128 = ONE_EVER / 5;
 
 pub fn compute_wallet_address(
     workchain_id: i8,

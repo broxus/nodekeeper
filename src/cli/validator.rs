@@ -49,8 +49,10 @@ pub struct Cmd {
 
 impl Cmd {
     pub async fn run(mut self, ctx: CliContext) -> Result<()> {
+        // Start listening termination signals
         let signal_rx = broxus_util::any_signal(broxus_util::TERMINATION_SIGNALS);
 
+        // Create validation manager
         let mut manager = ValidationManager {
             ctx,
             max_time_diff: std::cmp::max(self.max_time_diff as i32, 5),
@@ -59,6 +61,7 @@ impl Cmd {
             validation_mutex: Arc::new(Mutex::new(())),
         };
 
+        // Spawn cancellation future
         let cancellation_token = CancellationToken::new();
         let cancelled = cancellation_token.cancelled();
 
@@ -75,6 +78,7 @@ impl Cmd {
             }
         });
 
+        // Prepare validation future
         let validation_fut = async {
             self.min_retry_interval = std::cmp::max(self.min_retry_interval, 1);
             self.max_retry_interval =
@@ -97,6 +101,7 @@ impl Cmd {
             }
         };
 
+        // Cancellable main loop
         tokio::select! {
             _ = validation_fut => {},
             _ = cancelled => {},
@@ -151,13 +156,6 @@ impl ValidationManager {
                 .context("invalid elector params")?;
             let current_vset = blockchain_config
                 .validator_set()
-                .context("invalid validator set")?;
-            let next_vset = blockchain_config
-                .next_validator_set_present()
-                .and_then(|some| {
-                    some.then(|| blockchain_config.next_validator_set())
-                        .transpose()
-                })
                 .context("invalid validator set")?;
 
             // Create subscription
@@ -228,6 +226,7 @@ impl ValidationManager {
             // Get current election id
             let Some(election_id) = elector_data.election_id() else {
                 tracing::info!("no current elections in the elector state");
+                interval = 1; // retry nearly immediate
                 continue;
             };
             tracing::info!("election id: {election_id}");
@@ -241,10 +240,10 @@ impl ValidationManager {
                 election_id,
                 keypair,
                 timings,
+                guard: self.validation_mutex.clone(),
             };
 
             // Prepare election future
-            let _guard = self.validation_mutex.lock().await;
             let validation = match validation {
                 AppConfigValidation::Single(validation) => validation.elect(ctx).boxed(),
                 AppConfigValidation::DePool(validation) => validation.elect(ctx).boxed(),
@@ -295,13 +294,21 @@ struct ElectionsContext {
     election_id: u32,
     keypair: ed25519_dalek::Keypair,
     timings: ton_block::ConfigParam15,
+    guard: Arc<Mutex<()>>,
 }
 
 impl AppConfigValidationSingle {
     async fn elect(self, ctx: ElectionsContext) -> Result<()> {
         let wallet = wallet::Wallet::new(-1, ctx.keypair, ctx.subscription)?;
+        anyhow::ensure!(
+            wallet.address() == &self.address,
+            "validator wallet address mismatch"
+        );
 
-        if let Some(stake) = ctx.elector_data.has_unfrozen_stake(&self.address) {
+        if let Some(stake) = ctx.elector_data.has_unfrozen_stake(wallet.address()) {
+            // Prevent shutdown during stake recovery
+            let _guard = ctx.guard.lock().await;
+
             // Send recover stake message
             tracing::info!(stake = %Ever(stake.0), "recovering stake");
             wallet
@@ -310,13 +317,23 @@ impl AppConfigValidationSingle {
                 .context("failed to recover stake")?;
         }
 
-        let target_balance = self.stake_per_round as u128 + 2 * ONE_EVER;
+        if ctx.elector_data.elected(wallet.address()) {
+            // Do nothing if elected
+            tracing::info!("validator already elected");
+            return Ok(());
+        }
 
+        // Wait until validator wallet balance is enough
+        let target_balance = self.stake_per_round as u128 + 2 * ONE_EVER;
         let balance = wait_for_balance(target_balance, || wallet.get_balance())
             .await
             .context("failed to fetch validator balance")?;
         tracing::info!(balance = %Ever(balance), "fetched wallet balance");
 
+        // Prevent shutdown while electing
+        let _guard = ctx.guard.lock().await;
+
+        // Prepare node for elections
         let payload = ctx
             .elector
             .participate_in_elections(
@@ -329,6 +346,7 @@ impl AppConfigValidationSingle {
             .context("failed to prepare new validator key")?;
         tracing::info!("generated election payload");
 
+        // Send election message
         wallet
             .call(InternalMessage {
                 dst: ctx.elector.address().clone(),
@@ -338,6 +356,7 @@ impl AppConfigValidationSingle {
             .await
             .context("failed to participate in elections")?;
 
+        // Done
         tracing::info!("sent validator stake");
         Ok(())
     }

@@ -20,10 +20,6 @@ impl Strategy {
         }
     }
 
-    pub fn address(&self) -> &ton_block::MsgAddressInt {
-        &self.address
-    }
-
     pub async fn get_details(&self) -> Result<Details> {
         let details = self
             .subscription

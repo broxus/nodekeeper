@@ -16,7 +16,6 @@ mod tcp_adnl;
 
 #[derive(Clone)]
 pub struct NodeTcpRpc {
-    server_address: SocketAddr,
     tcp_adnl: TcpAdnl,
     query_timeout: Duration,
 }
@@ -35,7 +34,6 @@ impl NodeTcpRpc {
         let query_timeout = config.query_timeout;
 
         Ok(Self {
-            server_address: config.server_address.into(),
             tcp_adnl,
             query_timeout,
         })

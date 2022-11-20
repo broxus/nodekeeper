@@ -64,8 +64,18 @@ impl TcpAdnl {
             query_id: Default::default(),
         });
 
-        tokio::spawn(socket_writer(socket_tx, cipher_send, state.clone(), rx));
-        tokio::spawn(socket_reader(socket_rx, cipher_receive, state.clone()));
+        tokio::spawn(socket_writer(
+            socket_tx,
+            cipher_send,
+            rx,
+            state.cancellation_token.clone(),
+        ));
+        tokio::spawn(socket_reader(
+            socket_rx,
+            cipher_receive,
+            state.queries_cache.clone(),
+            state.cancellation_token.clone(),
+        ));
 
         build_handshake_packet(
             &config.server_pubkey,
@@ -133,15 +143,21 @@ struct SharedState {
     query_id: AtomicUsize,
 }
 
+impl Drop for SharedState {
+    fn drop(&mut self) {
+        self.cancellation_token.cancel();
+    }
+}
+
 async fn socket_writer<T>(
     mut socket: T,
     mut cipher: Aes256Ctr,
-    state: Arc<SharedState>,
     mut rx: PacketsRx,
+    cancellation_token: CancellationToken,
 ) where
     T: AsyncWrite + Unpin,
 {
-    tokio::pin!(let cancelled = state.cancellation_token.cancelled(););
+    tokio::pin!(let cancelled = cancellation_token.cancelled(););
 
     while let Some(mut packet) = rx.recv().await {
         let data = &mut packet.data;
@@ -166,27 +182,29 @@ async fn socket_writer<T>(
             res = socket.write_all(data) => match res {
                 Ok(_) => continue,
                 Err(e) => {
-                    if !state.cancellation_token.is_cancelled() {
-                        state.cancellation_token.cancel();
+                    if !cancellation_token.is_cancelled() {
+                        cancellation_token.cancel();
                         tracing::error!("failed to write data to the socket: {e:?}");
                     }
-                    return;
+                    break;
                 }
             },
-            _ = &mut cancelled => {
-                return
-            },
+            _ = &mut cancelled => break,
         }
     }
 
     tracing::debug!("sender loop finished");
 }
 
-async fn socket_reader<T>(mut socket: T, mut cipher: Aes256Ctr, state: Arc<SharedState>)
-where
+async fn socket_reader<T>(
+    mut socket: T,
+    mut cipher: Aes256Ctr,
+    queries_cache: Arc<QueriesCache>,
+    cancellation_token: CancellationToken,
+) where
     T: AsyncRead + Unpin,
 {
-    tokio::pin!(let cancelled = state.cancellation_token.cancelled(););
+    tokio::pin!(let cancelled = cancellation_token.cancelled(););
 
     loop {
         let mut length = [0; 4];
@@ -194,14 +212,14 @@ where
             res = socket.read_exact(&mut length) => match res {
                 Ok(_) => cipher.apply_keystream(&mut length),
                 Err(e) => {
-                    if !state.cancellation_token.is_cancelled() {
-                        state.cancellation_token.cancel();
+                    if !cancellation_token.is_cancelled() {
+                        cancellation_token.cancel();
                         tracing::error!("failed to read length from the socket: {e:?}");
                     }
-                    return;
+                    break;
                 }
             },
-            _ = &mut cancelled => return,
+            _ = &mut cancelled => break,
         }
 
         let length = u32::from_le_bytes(length) as usize;
@@ -214,14 +232,14 @@ where
             res = socket.read_exact(&mut buffer) => match res {
                 Ok(_) => cipher.apply_keystream(&mut buffer),
                 Err(e) => {
-                    if !state.cancellation_token.is_cancelled() {
-                        state.cancellation_token.cancel();
+                    if !cancellation_token.is_cancelled() {
+                        cancellation_token.cancel();
                         tracing::error!("failed to read data from the socket: {e:?}");
                     }
-                    return;
+                    break;
                 }
             },
-            _ = &mut cancelled => return,
+            _ = &mut cancelled => break,
         }
 
         if !sha2::Sha256::digest(&buffer[..length - 32])
@@ -241,11 +259,13 @@ where
 
         match tl_proto::deserialize::<AdnlMessageAnswer>(&buffer) {
             Ok(AdnlMessageAnswer { query_id, data }) => {
-                state.queries_cache.update_query(query_id, data);
+                queries_cache.update_query(query_id, data);
             }
             Err(e) => tracing::warn!("invalid response: {e:?}"),
         };
     }
+
+    tracing::debug!("receiver loop finished");
 }
 
 struct Packet {
