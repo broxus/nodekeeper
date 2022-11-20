@@ -1,12 +1,17 @@
-use std::collections::BTreeMap;
 use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use argh::FromArgs;
+use futures_util::FutureExt;
+use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 use super::{CliContext, ProjectDirs};
-use crate::config::{AppConfigValidation, StoredKeys};
+use crate::config::{
+    AppConfigValidation, AppConfigValidationDePool, AppConfigValidationSingle, StoredKeys,
+};
 use crate::contracts::{elector, wallet, InternalMessage, ONE_EVER};
 use crate::node_tcp_rpc::{ConfigWithId, NodeStats, NodeTcpRpc, RunningStats};
 use crate::node_udp_rpc::NodeUdpRpc;
@@ -44,31 +49,60 @@ pub struct Cmd {
 
 impl Cmd {
     pub async fn run(mut self, ctx: CliContext) -> Result<()> {
+        let signal_rx = broxus_util::any_signal(broxus_util::TERMINATION_SIGNALS);
+
         let mut manager = ValidationManager {
             ctx,
             max_time_diff: std::cmp::max(self.max_time_diff as i32, 5),
             elections_start_offset: self.elections_start_offset,
             elections_end_offset: self.elections_end_offset,
+            validation_mutex: Arc::new(Mutex::new(())),
         };
 
-        self.min_retry_interval = std::cmp::max(self.min_retry_interval, 1);
-        self.max_retry_interval = std::cmp::max(self.max_retry_interval, self.min_retry_interval);
-        self.retry_interval_multiplier = num::Float::max(self.retry_interval_multiplier, 1.0);
+        let cancellation_token = CancellationToken::new();
+        let cancelled = cancellation_token.cancelled();
 
-        let mut interval = self.min_retry_interval;
-        loop {
-            if let Err(e) = manager.try_validate().await {
-                tracing::error!("error occured: {e:?}");
+        tokio::spawn({
+            let validation_mutex = manager.validation_mutex.clone();
+            let cancellation_token = cancellation_token.clone();
+
+            async move {
+                if let Ok(signal) = signal_rx.await {
+                    tracing::warn!(?signal, "received termination signal");
+                    let _guard = validation_mutex.lock().await;
+                    cancellation_token.cancel();
+                }
             }
+        });
 
-            tracing::info!("retrying in {interval} seconds");
-            tokio::time::sleep(Duration::from_secs(interval)).await;
+        let validation_fut = async {
+            self.min_retry_interval = std::cmp::max(self.min_retry_interval, 1);
+            self.max_retry_interval =
+                std::cmp::max(self.max_retry_interval, self.min_retry_interval);
+            self.retry_interval_multiplier = num::Float::max(self.retry_interval_multiplier, 1.0);
 
-            interval = std::cmp::min(
-                self.max_retry_interval,
-                (interval as f64 * self.retry_interval_multiplier) as u64,
-            );
-        }
+            let mut interval = self.min_retry_interval;
+            loop {
+                if let Err(e) = manager.try_validate().await {
+                    tracing::error!("error occured: {e:?}");
+                }
+
+                tracing::info!("retrying in {interval} seconds");
+                tokio::time::sleep(Duration::from_secs(interval)).await;
+
+                interval = std::cmp::min(
+                    self.max_retry_interval,
+                    (interval as f64 * self.retry_interval_multiplier) as u64,
+                );
+            }
+        };
+
+        tokio::select! {
+            _ = validation_fut => {},
+            _ = cancelled => {},
+        };
+
+        Ok(())
     }
 }
 
@@ -77,6 +111,7 @@ struct ValidationManager {
     max_time_diff: i32,
     elections_start_offset: u32,
     elections_end_offset: u32,
+    validation_mutex: Arc<Mutex<()>>,
 }
 
 impl ValidationManager {
@@ -94,8 +129,8 @@ impl ValidationManager {
             }
 
             // Read config
-            let config = self.ctx.load_config()?;
-            let validation = config.validation()?;
+            let mut config = self.ctx.load_config()?;
+            let validation = config.take_validation()?;
 
             // Create tcp rpc and wait until node is synced
             let node_tcp_rpc = NodeTcpRpc::new(config.control()?).await?;
@@ -197,70 +232,33 @@ impl ValidationManager {
             };
             tracing::info!("election id: {election_id}");
 
-            // Prepare deadline future
-            let deadline = tokio::time::sleep(Duration::from_secs(
-                until_elections_end.saturating_sub(self.elections_end_offset) as u64,
-            ));
-
+            // Prepare context
             let keypair = dirs.load_validator_keys()?;
-            match &validation {
-                AppConfigValidation::Single(validation) => {
-                    let wallet = wallet::Wallet::new(-1, keypair, subscription.clone())?;
-
-                    if let Some(stake) = elector_data.has_unfrozen_stake(&validation.address) {
-                        // Send recover stake message
-                        tracing::info!(stake = stake.0, "recovering stake");
-                        wallet
-                            .call(elector.recover_stake()?)
-                            .await
-                            .context("failed to recover stake")?;
-                    }
-
-                    let elect = async {
-                        let target_balance = validation.stake_per_round as u128 + 2 * ONE_EVER;
-
-                        let balance = wait_for_balance(target_balance, || wallet.get_balance())
-                            .await
-                            .context("failed to fetch validator balance")?;
-                        tracing::info!(balance = %Ever(balance), "fetched wallet balance");
-
-                        let payload = elector
-                            .participate_in_elections(
-                                election_id,
-                                &validation.address,
-                                validation.stake_factor,
-                                &timings,
-                            )
-                            .await
-                            .context("failed to prepare new validator key")?;
-                        tracing::info!("generated election payload");
-
-                        wallet
-                            .call(InternalMessage {
-                                dst: elector.address().clone(),
-                                amount: validation.stake_per_round as u128 + ONE_EVER,
-                                payload,
-                            })
-                            .await
-                            .context("failed to participate in elections")?;
-                        tracing::info!("sent validator stake");
-
-                        Ok::<_, anyhow::Error>(())
-                    };
-
-                    tokio::select! {
-                        _ = deadline => {
-                            tracing::info!("elections deadline reached");
-                            continue
-                        }
-                        res = elect => res?,
-                    };
-                }
-                AppConfigValidation::DePool(_validation) => {
-                    tracing::info!("depool validator");
-                    // wallet::Wallet::new(0, keypair, subscription.clone())?;
-                }
+            let ctx = ElectionsContext {
+                subscription,
+                elector,
+                elector_data,
+                election_id,
+                keypair,
+                timings,
             };
+
+            // Prepare election future
+            let _guard = self.validation_mutex.lock().await;
+            let validation = match validation {
+                AppConfigValidation::Single(validation) => validation.elect(ctx).boxed(),
+                AppConfigValidation::DePool(validation) => validation.elect(ctx).boxed(),
+            };
+
+            // Try elect
+            let deadline = Duration::from_secs(
+                until_elections_end.saturating_sub(self.elections_end_offset) as u64,
+            );
+            match tokio::time::timeout(deadline, validation).await {
+                Ok(Ok(())) => tracing::info!("elections successfull"),
+                Ok(Err(e)) => return Err(e),
+                Err(_) => tracing::warn!("elections deadline reached"),
+            }
 
             interval = until_elections_end;
         }
@@ -287,6 +285,67 @@ impl ValidationManager {
             }
             tokio::time::sleep(interval).await;
         }
+    }
+}
+
+struct ElectionsContext {
+    subscription: Arc<Subscription>,
+    elector: elector::Elector,
+    elector_data: elector::ElectorData,
+    election_id: u32,
+    keypair: ed25519_dalek::Keypair,
+    timings: ton_block::ConfigParam15,
+}
+
+impl AppConfigValidationSingle {
+    async fn elect(self, ctx: ElectionsContext) -> Result<()> {
+        let wallet = wallet::Wallet::new(-1, ctx.keypair, ctx.subscription)?;
+
+        if let Some(stake) = ctx.elector_data.has_unfrozen_stake(&self.address) {
+            // Send recover stake message
+            tracing::info!(stake = %Ever(stake.0), "recovering stake");
+            wallet
+                .call(ctx.elector.recover_stake()?)
+                .await
+                .context("failed to recover stake")?;
+        }
+
+        let target_balance = self.stake_per_round as u128 + 2 * ONE_EVER;
+
+        let balance = wait_for_balance(target_balance, || wallet.get_balance())
+            .await
+            .context("failed to fetch validator balance")?;
+        tracing::info!(balance = %Ever(balance), "fetched wallet balance");
+
+        let payload = ctx
+            .elector
+            .participate_in_elections(
+                ctx.election_id,
+                wallet.address(),
+                self.stake_factor,
+                &ctx.timings,
+            )
+            .await
+            .context("failed to prepare new validator key")?;
+        tracing::info!("generated election payload");
+
+        wallet
+            .call(InternalMessage {
+                dst: ctx.elector.address().clone(),
+                amount: self.stake_per_round as u128 + ONE_EVER,
+                payload,
+            })
+            .await
+            .context("failed to participate in elections")?;
+
+        tracing::info!("sent validator stake");
+        Ok(())
+    }
+}
+
+impl AppConfigValidationDePool {
+    async fn elect(self, ctx: ElectionsContext) -> Result<()> {
+        Ok(())
     }
 }
 

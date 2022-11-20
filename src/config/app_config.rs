@@ -43,10 +43,8 @@ impl AppConfig {
         self.adnl.as_ref().context("adnl config is empty")
     }
 
-    pub fn validation(&self) -> Result<&AppConfigValidation> {
-        self.validation
-            .as_ref()
-            .context("validation config is empty")
+    pub fn take_validation(&mut self) -> Result<AppConfigValidation> {
+        self.validation.take().context("validation config is empty")
     }
 }
 
