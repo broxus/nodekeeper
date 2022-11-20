@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use argh::FromArgs;
+use broxus_util::now;
 use futures_util::FutureExt;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -174,7 +175,7 @@ impl ValidationManager {
             let timeline = Timeline::compute(&timings, &current_vset, target_block_info.gen_utime);
             tracing::info!("timeline: {timeline}");
 
-            let until_elections_end = match timeline {
+            let elections_end = match timeline {
                 // If elections were not started yet, wait for the start (with an additonal offset)
                 Timeline::BeforeElections {
                     until_elections_start,
@@ -187,6 +188,7 @@ impl ValidationManager {
                 Timeline::Elections {
                     since_elections_start,
                     until_elections_end,
+                    elections_end,
                 } => {
                     if let Some(offset) = self
                         .elections_start_offset
@@ -205,7 +207,7 @@ impl ValidationManager {
                         continue;
                     } else {
                         // We can participate, remember elections end timestamp
-                        until_elections_end
+                        elections_end
                     }
                 }
                 // Elections were already finished, wait for the new round
@@ -251,7 +253,9 @@ impl ValidationManager {
 
             // Try elect
             let deadline = Duration::from_secs(
-                until_elections_end.saturating_sub(self.elections_end_offset) as u64,
+                elections_end
+                    .saturating_sub(self.elections_end_offset)
+                    .saturating_sub(now()) as u64,
             );
             match tokio::time::timeout(deadline, validation).await {
                 Ok(Ok(())) => tracing::info!("elections successfull"),
@@ -259,7 +263,7 @@ impl ValidationManager {
                 Err(_) => tracing::warn!("elections deadline reached"),
             }
 
-            interval = until_elections_end;
+            interval = elections_end.saturating_sub(now());
         }
     }
 
@@ -376,6 +380,7 @@ enum Timeline {
     Elections {
         since_elections_start: u32,
         until_elections_end: u32,
+        elections_end: u32,
     },
     AfterElections {
         until_round_end: u32,
@@ -393,6 +398,7 @@ impl std::fmt::Display for Timeline {
             Self::Elections {
                 since_elections_start: since,
                 until_elections_end: until,
+                ..
             } => f.write_fmt(format_args!(
                 "elections (started {since}s ago, {until}s remaining)"
             )),
@@ -423,6 +429,7 @@ impl Timeline {
             return Self::Elections {
                 since_elections_start: now.saturating_sub(elections_start),
                 until_elections_end: until_end,
+                elections_end,
             };
         }
 
