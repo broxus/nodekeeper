@@ -195,14 +195,12 @@ impl ValidationManager {
                         .checked_sub(since_elections_start)
                     {
                         // Wait a bit after elections start
-                        tracing::info!("too early to participate in elections");
                         interval = offset;
                         continue;
                     } else if let Some(offset) =
                         self.elections_end_offset.checked_sub(until_elections_end)
                     {
                         // Elections will end soon, attempts are doomed
-                        tracing::info!("too late to participate in elections");
                         interval = offset;
                         continue;
                     } else {
@@ -319,6 +317,8 @@ impl AppConfigValidationSingle {
         );
 
         if let Some(stake) = ctx.elector_data.has_unfrozen_stake(wallet.address()) {
+            wait_for_wallet_balance(2 * ONE_EVER, &wallet).await?;
+
             // Prevent shutdown during stake recovery
             let _guard = ctx.guard.lock().await;
 
@@ -338,11 +338,7 @@ impl AppConfigValidationSingle {
 
         // Wait until validator wallet balance is enough
         let target_balance = self.stake_per_round as u128 + 2 * ONE_EVER;
-        tracing::info!(target_balance = %Ever(target_balance), "waiting for the wallet balance");
-        let balance = wait_for_balance(target_balance, || wallet.get_balance())
-            .await
-            .context("failed to fetch validator balance")?;
-        tracing::info!(balance = %Ever(balance), "fetched wallet balance");
+        wait_for_wallet_balance(target_balance, &wallet).await?;
 
         // Prevent shutdown while electing
         let _guard = ctx.guard.lock().await;
@@ -442,12 +438,7 @@ impl AppConfigValidationDePool {
         }
 
         // Wait until validator wallet balance is enough
-        let target_balance = 2 * ONE_EVER;
-        tracing::info!(target_balance = %Ever(target_balance), "waiting for the wallet balance");
-        let balance = wait_for_balance(target_balance, || wallet.get_balance())
-            .await
-            .context("failed to fetch validator balance")?;
-        tracing::info!(balance = %Ever(balance), "fetched wallet balance");
+        wait_for_wallet_balance(2 * ONE_EVER, &wallet).await?;
 
         // Prevent shutdown while electing
         let _guard = ctx.guard.lock().await;
@@ -507,11 +498,15 @@ impl AppConfigValidationDePool {
                 .collect::<Vec<_>>();
             anyhow::ensure!(rounds.len() == 4, "DePool rounds number mismatch");
 
+            let prev_round = &rounds[0];
             let target_round = &rounds[1];
             let pooling_round = &rounds[2];
 
             let pooling_round_stake = match participant_info {
-                Some(participant) => participant.compute_total_stake(pooling_round.id),
+                Some(participant) => {
+                    participant.compute_total_stake(pooling_round.id)
+                        + participant.compute_total_stake(prev_round.id)
+                }
                 None => 0,
             };
 
@@ -528,13 +523,7 @@ impl AppConfigValidationDePool {
             {
                 if remaining_stake > 0 {
                     remaining_stake = std::cmp::max(remaining_stake, depool_info.min_stake);
-
-                    let target_balance = remaining_stake as u128 + ONE_EVER;
-                    tracing::info!(target_balance = %Ever(target_balance), "waiting for the wallet balance");
-                    let balance = wait_for_balance(target_balance, || wallet.get_balance())
-                        .await
-                        .context("failed to fetch validator balance")?;
-                    tracing::info!(balance = %Ever(balance), "fetched wallet balance");
+                    wait_for_wallet_balance(remaining_stake as u128 + ONE_EVER, wallet).await?;
 
                     // Prevent shutdown during sending stake
                     let _guard = guard.lock().await;
@@ -563,6 +552,8 @@ impl AppConfigValidationDePool {
             }
 
             // Update rounds
+            wait_for_wallet_balance(2 * ONE_EVER, wallet).await?;
+
             tracing::info!("sending ticktock");
             wallet
                 .call(depool.ticktock()?)
@@ -645,6 +636,22 @@ impl Timeline {
             until_round_end: round_end.saturating_sub(now),
         }
     }
+}
+
+async fn wait_for_wallet_balance(target_balance: u128, wallet: &wallet::Wallet) -> Result<()> {
+    let current_balance = wallet.get_balance().await?.unwrap_or_default();
+    if current_balance < target_balance {
+        tracing::info!(
+            current_balance = %Ever(current_balance),
+            target_balance = %Ever(target_balance),
+            "waiting for the wallet balance"
+        );
+        let balance = wait_for_balance(target_balance, || wallet.get_balance())
+            .await
+            .context("failed to fetch validator balance")?;
+        tracing::info!(balance = %Ever(balance), "fetched wallet balance");
+    }
+    Ok(())
 }
 
 async fn wait_for_balance<F>(target: u128, mut f: impl FnMut() -> F) -> Result<u128>
