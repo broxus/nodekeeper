@@ -125,7 +125,8 @@ pub struct AppConfigValidationSingle {
     pub address: ton_block::MsgAddressInt,
     #[serde(with = "serde_string_or_number")]
     pub stake_per_round: u64,
-    pub stake_factor: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stake_factor: Option<u32>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -142,9 +143,11 @@ pub struct AppConfigValidationDePool {
         skip_serializing_if = "Option::is_none"
     )]
     pub strategy: Option<ton_block::MsgAddressInt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stake_factor: Option<u32>,
 }
 
-#[derive(Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub enum DePoolType {
     #[serde(rename = "default_v3")]
     DefaultV3,

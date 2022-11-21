@@ -16,8 +16,6 @@ use crate::node_udp_rpc::NodeUdpRpc;
 use crate::subscription::Subscription;
 use crate::util::*;
 
-const DEFAULT_STAKE_FACTOR: f64 = 3.0;
-
 const DEFAULT_MIN_STAKE: u64 = 10;
 const DEFAULT_VALIDATOR_ASSURANCE: u64 = 10_000;
 const DEFAULT_PARTICIPANT_REWARD_FRACTION: u8 = 95;
@@ -100,7 +98,6 @@ async fn prepare_single_validator(
         .context("failed to get stakes config")?;
     let min_stake = num::integer::div_ceil(stakes_config.min_stake.0, ONE_EVER);
     let max_stake = num::integer::div_floor(stakes_config.max_stake.0, ONE_EVER);
-    let max_stake_factor = stakes_config.max_stake_factor;
 
     // Prepare validator wallet
     steps.next("Creating validator wallet");
@@ -114,7 +111,7 @@ async fn prepare_single_validator(
     // Configure stake params
     steps.next("Configuring the stake");
 
-    // 1. Stake per round
+    // Configure stake per round
     let stake_per_round: u64 = Input::with_theme(theme)
         .with_prompt("Stake per round (EVER)")
         .validate_with(|stake: &u64| match *stake as u128 {
@@ -125,26 +122,11 @@ async fn prepare_single_validator(
         .interact_text()?;
     let stake_per_round = stake_per_round.saturating_mul(ONE_EVER as u64);
 
-    // 2. Stake factor
-    let stake_factor: f64 = Input::with_theme(theme)
-        .with_prompt("Stake factor")
-        .with_initial_text(DEFAULT_STAKE_FACTOR.to_string())
-        .validate_with(|factor: &f64| match to_factor_repr(*factor) {
-            x if x > max_stake_factor => Err(format!(
-                "Too big stake factor (max is {})",
-                from_factor_repr(max_stake_factor)
-            )),
-            x if x < to_factor_repr(1.0) => Err("Too small stake factor (min is 1.0)".to_owned()),
-            _ => Ok::<_, String>(()),
-        })
-        .interact_text()?;
-    let stake_factor = std::cmp::min(to_factor_repr(stake_factor), max_stake_factor);
-
     // Save config
     app_config.validation = Some(AppConfigValidation::Single(AppConfigValidationSingle {
         address: wallet.address().clone(),
         stake_per_round,
-        stake_factor,
+        stake_factor: None,
     }));
     dirs.store_app_config(app_config)?;
 
@@ -219,6 +201,7 @@ async fn prepare_depool_validator(
             depool: depool.address().clone(),
             depool_type,
             strategy: None,
+            stake_factor: None,
         },
     )));
     dirs.store_app_config(app_config)?;
@@ -589,14 +572,3 @@ fn prepare_keys<P: AsRef<Path>>(
 
     Ok(stored_keys.as_keypair())
 }
-
-fn to_factor_repr(factor: f64) -> u32 {
-    (factor * F) as u32
-}
-
-fn from_factor_repr(factor: u32) -> f64 {
-    factor as f64 / F
-}
-
-// Float conversion factor
-const F: f64 = 65536.0;

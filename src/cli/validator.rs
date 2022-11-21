@@ -231,7 +231,6 @@ impl ValidationManager {
                 interval = 1; // retry nearly immediate
                 continue;
             };
-            tracing::info!("election id: {election_id}");
 
             // Prepare context
             let keypair = dirs.load_validator_keys()?;
@@ -302,6 +301,16 @@ struct ElectionsContext {
 }
 
 impl AppConfigValidationSingle {
+    #[tracing::instrument(
+        skip_all,
+        name = "elect_as_single",
+        fields(
+            election_id = ctx.election_id,
+            address = %self.address,
+            stake = %Ever(self.stake_per_round),
+            stake_factor = ?self.stake_factor,
+        )
+    )]
     async fn elect(self, ctx: ElectionsContext) -> Result<()> {
         let wallet = wallet::Wallet::new(-1, ctx.keypair, ctx.subscription)?;
         anyhow::ensure!(
@@ -323,11 +332,7 @@ impl AppConfigValidationSingle {
 
         if ctx.elector_data.elected(wallet.address()) {
             // Do nothing if elected
-            tracing::info!(
-                election_id = ctx.election_id,
-                addr = %wallet.address(),
-                "validator already elected"
-            );
+            tracing::info!("validator already elected");
             return Ok(());
         }
 
@@ -348,7 +353,7 @@ impl AppConfigValidationSingle {
             .participate_in_elections(
                 ctx.election_id,
                 wallet.address(),
-                self.stake_factor,
+                self.stake_factor.unwrap_or(DEFAULT_STAKE_FACTOR),
                 &ctx.timings,
             )
             .await
@@ -372,6 +377,17 @@ impl AppConfigValidationSingle {
 }
 
 impl AppConfigValidationDePool {
+    #[tracing::instrument(
+        skip_all,
+        name = "elect_as_depool",
+        fields(
+            election_id = ctx.election_id,
+            depool = %self.depool,
+            depool_type = ?self.depool_type,
+            owner = %self.owner,
+            stake_factor = ?self.stake_factor,
+        )
+    )]
     async fn elect(self, ctx: ElectionsContext) -> Result<()> {
         let wallet = wallet::Wallet::new(0, ctx.keypair, ctx.subscription.clone())?;
         anyhow::ensure!(
@@ -408,22 +424,13 @@ impl AppConfigValidationDePool {
             .context("failed to update depool")?;
 
         if step != depool::RoundStep::WaitingValidatorRequest {
-            tracing::info!(
-                election_id = ctx.election_id,
-                depool = %depool.address(),
-                "depool is not waiting for the validator request"
-            );
+            tracing::info!("depool is not waiting for the validator request");
             return Ok(());
         }
 
         let proxy = &depool_info.proxies[round_id as usize % 2];
         if ctx.elector_data.elected(proxy) {
-            tracing::info!(
-                election_id = ctx.election_id,
-                %proxy,
-                depool = %depool.address(),
-                "proxy already elected"
-            );
+            tracing::info!(%proxy, "proxy already elected");
             return Ok(());
         }
 
@@ -444,7 +451,7 @@ impl AppConfigValidationDePool {
             .participate_in_elections(
                 ctx.election_id,
                 proxy,
-                196608, // TODO: move into config
+                self.stake_factor.unwrap_or(DEFAULT_STAKE_FACTOR),
                 &ctx.timings,
             )
             .await
@@ -500,7 +507,7 @@ impl AppConfigValidationDePool {
                 None => 0,
             };
 
-            tracing::info!(
+            tracing::debug!(
                 target_round_stake = %Ever(target_round.validator_stake),
                 target_round_step = ?target_round.step,
                 pooling_round_stake = %Ever(pooling_round_stake),
@@ -647,3 +654,5 @@ impl ProjectDirs {
         Ok(keys.as_keypair())
     }
 }
+
+const DEFAULT_STAKE_FACTOR: u32 = 196608;
