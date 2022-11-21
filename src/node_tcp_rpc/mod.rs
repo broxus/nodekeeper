@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, time::Duration};
+use std::time::Duration;
 
 use anyhow::Result;
 use everscale_crypto::ed25519;

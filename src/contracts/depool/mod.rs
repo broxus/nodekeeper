@@ -25,13 +25,26 @@ pub struct DePoolInitParams {
 
 pub struct DePool {
     ty: DePoolType,
-    keypair: ed25519_dalek::Keypair,
+    keypair: Option<ed25519_dalek::Keypair>,
     address: ton_block::MsgAddressInt,
     subscription: Arc<Subscription>,
 }
 
 impl DePool {
     pub fn new(
+        ty: DePoolType,
+        address: ton_block::MsgAddressInt,
+        subscription: Arc<Subscription>,
+    ) -> Self {
+        Self {
+            ty,
+            keypair: None,
+            address,
+            subscription,
+        }
+    }
+
+    pub fn from_keypair(
         ty: DePoolType,
         keypair: ed25519_dalek::Keypair,
         subscription: Arc<Subscription>,
@@ -40,7 +53,7 @@ impl DePool {
 
         Ok(Self {
             ty,
-            keypair,
+            keypair: Some(keypair),
             address,
             subscription,
         })
@@ -72,6 +85,8 @@ impl DePool {
     }
 
     pub async fn deploy(&self, params: DePoolInitParams) -> Result<()> {
+        let keypair = self.keypair.as_ref().context("DePool keypair not set")?;
+
         let inputs = ConstructorInputs {
             min_stake: params.min_stake,
             validator_assurance: params.validator_assurance,
@@ -91,13 +106,13 @@ impl DePool {
                             &header,
                             &inputs,
                             false,
-                            Some(&self.keypair),
+                            Some(keypair),
                             Some(self.address.clone()),
                         )
                         .context("failed to encode constructor")?,
                 );
 
-                message.set_state_init(self.ty.compute_depool_state_init(&self.keypair.public)?);
+                message.set_state_init(self.ty.compute_depool_state_init(&keypair.public)?);
 
                 Ok((message, expire_at))
             })
@@ -108,6 +123,8 @@ impl DePool {
     }
 
     pub async fn terminate(&self) -> Result<()> {
+        let keypair = self.keypair.as_ref().context("DePool keypair not set")?;
+
         self.subscription
             .send_message_with_retires(move |timeout| {
                 let (expire_at, header) = make_default_headers(None, timeout);
@@ -118,7 +135,7 @@ impl DePool {
                             &header,
                             &[],
                             false,
-                            Some(&self.keypair),
+                            Some(keypair),
                             Some(self.address.clone()),
                         )
                         .context("failed to encode termination message")?,
@@ -375,6 +392,22 @@ pub struct ParticipantInfo {
     pub lock_donor: ton_block::MsgAddressInt,
 }
 
+impl ParticipantInfo {
+    pub fn compute_total_stake(&self, round: u64) -> u64 {
+        let mut result = 0;
+        if let Some(ordinary) = self.stakes.get(&round) {
+            result += ordinary;
+        }
+        if let Some(vesting) = self.vestings.get(&round) {
+            result += vesting.remaining_amount;
+        }
+        if let Some(lock) = self.locks.get(&round) {
+            result += lock.remaining_amount;
+        }
+        result
+    }
+}
+
 #[derive(Debug, Clone, UnpackAbi, KnownParamType)]
 pub struct ComplexStake {
     #[abi(uint64)]
@@ -415,7 +448,7 @@ pub struct DePoolInfo {
     pub proxy_fee: u64,
 }
 
-#[derive(UnpackAbi, KnownParamType)]
+#[derive(Debug, UnpackAbi, KnownParamType)]
 pub struct Round {
     #[abi(uint64)]
     pub id: u64,

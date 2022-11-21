@@ -207,7 +207,7 @@ async fn prepare_depool_validator(
     };
 
     // Create depool wrapper
-    let depool = depool::DePool::new(depool_type, depool_keypair, subscription.clone())
+    let depool = depool::DePool::from_keypair(depool_type, depool_keypair, subscription.clone())
         .context("failed to create DePool")?;
 
     print_important_value("DePool address", depool.address());
@@ -278,7 +278,7 @@ async fn prepare_depool_validator(
         // Compute remaining depool balance
         let depool_initial_balance = DEPOOL_MIN_BALANCE
             .checked_sub(depool_balance)
-            .map(|diff| std::cmp::max(diff, ONE_EVER));
+            .and_then(|diff| (diff > 0).then_some(std::cmp::max(diff, ONE_EVER)));
 
         // Wait until validator wallet will have enough funds
         let balance = wait_for_balance(
@@ -447,16 +447,14 @@ async fn prepare_depool_validator(
         .get_participant_info(&depool_state, wallet.address())
         .context("failed to get participant info")?;
 
-    if participant_info.is_some() {
+    if let Some(participant_info) = participant_info {
         anyhow::ensure!(rounds.len() == 4, "invalid DePool rounds");
 
         // Compute remaining validator assurance
         let mut remaining = 0;
-        for next_round in rounds.into_values().skip(2) {
-            if let Some(diff) = depool_info
-                .validator_assurance
-                .checked_sub(next_round.validator_stake)
-            {
+        for next_round in rounds.into_keys().skip(2) {
+            let validator_stake = participant_info.compute_total_stake(next_round);
+            if let Some(diff) = depool_info.validator_assurance.checked_sub(validator_stake) {
                 remaining += diff;
             }
         }

@@ -13,7 +13,7 @@ use super::{CliContext, ProjectDirs};
 use crate::config::{
     AppConfigValidation, AppConfigValidationDePool, AppConfigValidationSingle, StoredKeys,
 };
-use crate::contracts::{elector, wallet, InternalMessage, ONE_EVER};
+use crate::contracts::{depool, elector, wallet, InternalMessage, ONE_EVER};
 use crate::node_tcp_rpc::{ConfigWithId, NodeStats, NodeTcpRpc, RunningStats};
 use crate::node_udp_rpc::NodeUdpRpc;
 use crate::subscription::Subscription;
@@ -323,12 +323,17 @@ impl AppConfigValidationSingle {
 
         if ctx.elector_data.elected(wallet.address()) {
             // Do nothing if elected
-            tracing::info!("validator already elected");
+            tracing::info!(
+                election_id = ctx.election_id,
+                addr = %wallet.address(),
+                "validator already elected"
+            );
             return Ok(());
         }
 
         // Wait until validator wallet balance is enough
         let target_balance = self.stake_per_round as u128 + 2 * ONE_EVER;
+        tracing::info!(target_balance = %Ever(target_balance), "waiting for the wallet balance");
         let balance = wait_for_balance(target_balance, || wallet.get_balance())
             .await
             .context("failed to fetch validator balance")?;
@@ -368,7 +373,189 @@ impl AppConfigValidationSingle {
 
 impl AppConfigValidationDePool {
     async fn elect(self, ctx: ElectionsContext) -> Result<()> {
+        let wallet = wallet::Wallet::new(0, ctx.keypair, ctx.subscription.clone())?;
+        anyhow::ensure!(
+            wallet.address() == &self.owner,
+            "validator wallet address mismatch"
+        );
+
+        let depool = depool::DePool::new(self.depool_type, self.depool.clone(), ctx.subscription);
+        let depool_state = depool
+            .get_state()
+            .await
+            .context("failed to get DePool state")?;
+
+        let depool_info = depool
+            .get_info(&depool_state)
+            .context("failed to get DePool info")?;
+        anyhow::ensure!(
+            wallet.address() == &depool_info.validator_wallet,
+            "DePool owner mismatch"
+        );
+        anyhow::ensure!(depool_info.proxies.len() == 2, "invalid DePool proxies");
+
+        // Update depool
+        let (round_id, step) = self
+            .update_depool(
+                &wallet,
+                &depool,
+                &depool_info,
+                depool_state,
+                ctx.election_id,
+                &ctx.guard,
+            )
+            .await
+            .context("failed to update depool")?;
+
+        if step != depool::RoundStep::WaitingValidatorRequest {
+            tracing::info!(
+                election_id = ctx.election_id,
+                depool = %depool.address(),
+                "depool is not waiting for the validator request"
+            );
+            return Ok(());
+        }
+
+        let proxy = &depool_info.proxies[round_id as usize % 2];
+        if ctx.elector_data.elected(proxy) {
+            tracing::info!(
+                election_id = ctx.election_id,
+                %proxy,
+                depool = %depool.address(),
+                "proxy already elected"
+            );
+            return Ok(());
+        }
+
+        // Wait until validator wallet balance is enough
+        let target_balance = 2 * ONE_EVER;
+        tracing::info!(target_balance = %Ever(target_balance), "waiting for the wallet balance");
+        let balance = wait_for_balance(target_balance, || wallet.get_balance())
+            .await
+            .context("failed to fetch validator balance")?;
+        tracing::info!(balance = %Ever(balance), "fetched wallet balance");
+
+        // Prevent shutdown while electing
+        let _guard = ctx.guard.lock().await;
+
+        // Prepare node for elections
+        let payload = ctx
+            .elector
+            .participate_in_elections(
+                ctx.election_id,
+                proxy,
+                196608, // TODO: move into config
+                &ctx.timings,
+            )
+            .await
+            .context("failed to prepare new validator key")?;
+        tracing::info!("generated election payload");
+
+        // Send election message
+        wallet
+            .call(InternalMessage {
+                dst: depool.address().clone(),
+                amount: ONE_EVER,
+                payload,
+            })
+            .await
+            .context("failed to participate in elections")?;
+
+        // Done
+        tracing::info!("sent validator stake");
         Ok(())
+    }
+
+    async fn update_depool(
+        &self,
+        wallet: &wallet::Wallet,
+        depool: &depool::DePool,
+        depool_info: &depool::DePoolInfo,
+        mut depool_state: ton_block::AccountStuff,
+        election_id: u32,
+        guard: &Mutex<()>,
+    ) -> Result<(u64, depool::RoundStep)> {
+        const UPDATE_INTERVAL: Duration = Duration::from_secs(10);
+
+        let mut attempts = 4;
+        loop {
+            // Get validator stakes info
+            let participant_info = depool
+                .get_participant_info(&depool_state, wallet.address())
+                .context("failed to get participant info")?;
+
+            // Get all depool rounds
+            let rounds = depool
+                .get_rounds(&depool_state)
+                .context("failed to get depool rounds")?
+                .into_values()
+                .collect::<Vec<_>>();
+            anyhow::ensure!(rounds.len() == 4, "DePool rounds number mismatch");
+
+            let target_round = &rounds[1];
+            let pooling_round = &rounds[2];
+
+            let pooling_round_stake = match participant_info {
+                Some(participant) => participant.compute_total_stake(pooling_round.id),
+                None => 0,
+            };
+
+            tracing::info!(
+                target_round_stake = %Ever(target_round.validator_stake),
+                target_round_step = ?target_round.step,
+                pooling_round_stake = %Ever(pooling_round_stake),
+            );
+
+            // Add ordinary stake to the pooling round if needed
+            if let Some(mut remaining_stake) = depool_info
+                .validator_assurance
+                .checked_sub(pooling_round_stake)
+            {
+                if remaining_stake > 0 {
+                    remaining_stake = std::cmp::max(remaining_stake, depool_info.min_stake);
+
+                    let target_balance = remaining_stake as u128 + ONE_EVER;
+                    tracing::info!(target_balance = %Ever(target_balance), "waiting for the wallet balance");
+                    let balance = wait_for_balance(target_balance, || wallet.get_balance())
+                        .await
+                        .context("failed to fetch validator balance")?;
+                    tracing::info!(balance = %Ever(balance), "fetched wallet balance");
+
+                    // Prevent shutdown during sending stake
+                    let _guard = guard.lock().await;
+
+                    // Send recover stake message
+                    tracing::info!(stake = %Ever(remaining_stake), "adding ordinary stake");
+                    wallet
+                        .call(depool.add_ordinary_stake(remaining_stake)?)
+                        .await
+                        .context("failed to add ordinary stake")?;
+                }
+            }
+
+            // Return target round if it is configured
+            if target_round.supposed_elected_at == election_id {
+                break Ok((target_round.id, target_round.step));
+            } else {
+                // Reduce attempts otherwise
+                attempts -= 1;
+                anyhow::ensure!(attempts > 0, "failed to update rounds");
+            }
+
+            // Update rounds
+            tracing::info!("sending ticktock");
+            wallet
+                .call(depool.ticktock()?)
+                .await
+                .context("failed to send ticktock")?;
+            tokio::time::sleep(UPDATE_INTERVAL).await;
+
+            // Update depool state
+            depool_state = depool
+                .get_state()
+                .await
+                .context("failed to get DePool state")?;
+        }
     }
 }
 
