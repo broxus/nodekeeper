@@ -27,6 +27,10 @@ pub struct Cmd {
     #[argh(option, default = "120")]
     max_time_diff: u16,
 
+    /// offset after stake unfreeze (in seconds). 600 seconds default
+    #[argh(option, default = "600")]
+    stake_unfreeze_offset: u32,
+
     /// elections start offset (in seconds). 600 seconds default
     #[argh(option, default = "600")]
     elections_start_offset: u32,
@@ -57,6 +61,7 @@ impl Cmd {
         let mut manager = ValidationManager {
             ctx,
             max_time_diff: std::cmp::max(self.max_time_diff as i32, 5),
+            stake_unfreeze_offset: self.stake_unfreeze_offset,
             elections_start_offset: self.elections_start_offset,
             elections_end_offset: self.elections_end_offset,
             validation_mutex: Arc::new(Mutex::new(())),
@@ -115,6 +120,7 @@ impl Cmd {
 struct ValidationManager {
     ctx: CliContext,
     max_time_diff: i32,
+    stake_unfreeze_offset: u32,
     elections_start_offset: u32,
     elections_end_offset: u32,
     validation_mutex: Arc<Mutex<()>>,
@@ -230,6 +236,23 @@ impl ValidationManager {
                 continue;
             };
 
+            // Wait until stakes are unfrozen
+            if let Some(mut unfreeze_at) = elector_data.nearest_unfreeze_at(election_id) {
+                unfreeze_at += self.stake_unfreeze_offset;
+                if unfreeze_at > elections_end.saturating_sub(self.elections_end_offset) {
+                    tracing::warn!(
+                        unfreeze_at,
+                        elections_end,
+                        "stakes will unfreeze after the end of the elections"
+                    );
+                } else if let Some(until_unfreeze) = unfreeze_at.checked_sub(now()) {
+                    if until_unfreeze > 0 {
+                        tracing::info!(until_unfreeze, "waiting for stakes to unfreeze");
+                        tokio::time::sleep(Duration::from_secs(until_unfreeze as u64)).await;
+                    }
+                }
+            }
+
             // Prepare context
             let keypair = dirs.load_validator_keys()?;
             let ctx = ElectionsContext {
@@ -237,15 +260,14 @@ impl ValidationManager {
                 elector,
                 elector_data,
                 election_id,
-                keypair,
                 timings,
                 guard: self.validation_mutex.clone(),
             };
 
             // Prepare election future
             let validation = match validation {
-                AppConfigValidation::Single(validation) => validation.elect(ctx).boxed(),
-                AppConfigValidation::DePool(validation) => validation.elect(ctx).boxed(),
+                AppConfigValidation::Single(validation) => validation.elect(keypair, ctx).boxed(),
+                AppConfigValidation::DePool(validation) => validation.elect(keypair, ctx).boxed(),
             };
 
             // Try elect
@@ -293,7 +315,6 @@ struct ElectionsContext {
     elector: elector::Elector,
     elector_data: elector::ElectorData,
     election_id: u32,
-    keypair: ed25519_dalek::Keypair,
     timings: ton_block::ConfigParam15,
     guard: Arc<Mutex<()>>,
 }
@@ -309,8 +330,8 @@ impl AppConfigValidationSingle {
             stake_factor = ?self.stake_factor,
         )
     )]
-    async fn elect(self, ctx: ElectionsContext) -> Result<()> {
-        let wallet = wallet::Wallet::new(-1, ctx.keypair, ctx.subscription)?;
+    async fn elect(self, keypair: ed25519_dalek::Keypair, ctx: ElectionsContext) -> Result<()> {
+        let wallet = wallet::Wallet::new(-1, keypair, ctx.subscription)?;
         anyhow::ensure!(
             wallet.address() == &self.address,
             "validator wallet address mismatch"
@@ -384,14 +405,18 @@ impl AppConfigValidationDePool {
             stake_factor = ?self.stake_factor,
         )
     )]
-    async fn elect(self, ctx: ElectionsContext) -> Result<()> {
-        let wallet = wallet::Wallet::new(0, ctx.keypair, ctx.subscription.clone())?;
+    async fn elect(self, keypair: ed25519_dalek::Keypair, ctx: ElectionsContext) -> Result<()> {
+        let wallet = wallet::Wallet::new(0, keypair, ctx.subscription.clone())?;
         anyhow::ensure!(
             wallet.address() == &self.owner,
             "validator wallet address mismatch"
         );
 
-        let depool = depool::DePool::new(self.depool_type, self.depool.clone(), ctx.subscription);
+        let depool = depool::DePool::new(
+            self.depool_type,
+            self.depool.clone(),
+            ctx.subscription.clone(),
+        );
         let depool_state = depool
             .get_state()
             .await
@@ -408,14 +433,7 @@ impl AppConfigValidationDePool {
 
         // Update depool
         let (round_id, step) = match self
-            .update_depool(
-                &wallet,
-                &depool,
-                &depool_info,
-                depool_state,
-                ctx.election_id,
-                &ctx.guard,
-            )
+            .update_depool(&wallet, &depool, &depool_info, depool_state, &ctx)
             .await
             .context("failed to update depool")?
         {
@@ -477,8 +495,7 @@ impl AppConfigValidationDePool {
         depool: &depool::DePool,
         depool_info: &depool::DePoolInfo,
         mut depool_state: ton_block::AccountStuff,
-        election_id: u32,
-        guard: &Mutex<()>,
+        ctx: &ElectionsContext,
     ) -> Result<Option<(u64, depool::RoundStep)>> {
         const UPDATE_INTERVAL: Duration = Duration::from_secs(10);
 
@@ -526,7 +543,7 @@ impl AppConfigValidationDePool {
                     wait_for_wallet_balance(remaining_stake as u128 + ONE_EVER, wallet).await?;
 
                     // Prevent shutdown during sending stake
-                    let _guard = guard.lock().await;
+                    let _guard = ctx.guard.lock().await;
 
                     // Send recover stake message
                     tracing::info!(stake = %Ever(remaining_stake), "adding ordinary stake");
@@ -537,7 +554,7 @@ impl AppConfigValidationDePool {
                 }
             }
 
-            if target_round.supposed_elected_at == election_id {
+            if target_round.supposed_elected_at == ctx.election_id {
                 // Return target round if it is configured
                 break Ok(Some((target_round.id, target_round.step)));
             } else if sent_ticktock

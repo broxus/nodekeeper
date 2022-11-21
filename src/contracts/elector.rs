@@ -160,6 +160,14 @@ impl ElectorData {
         Some(election_id)
     }
 
+    pub fn nearest_unfreeze_at(&self, election_id: u32) -> Option<u32> {
+        self.inner
+            .past_elections
+            .values()
+            .map(|election| election.unfreeze_at)
+            .find(|&unfreeze_at| unfreeze_at < election_id)
+    }
+
     pub fn has_unfrozen_stake(
         &self,
         address: &ton_block::MsgAddressInt,
@@ -239,6 +247,8 @@ mod data {
         pub current_election: MaybeRef<CurrentElectionData>,
         #[abi]
         pub credits: BTreeMap<ton_types::UInt256, ton_block::Grams>,
+        #[abi]
+        pub past_elections: BTreeMap<u32, PastElectionData>,
     }
 
     #[derive(Debug, UnpackAbi, KnownParamType)]
@@ -271,6 +281,12 @@ mod data {
         pub src_addr: ton_types::UInt256,
         #[abi(uint256)]
         pub adnl_addr: ton_types::UInt256,
+    }
+
+    #[derive(Debug, UnpackAbi, KnownParamType)]
+    pub struct PastElectionData {
+        #[abi(uint32)]
+        pub unfreeze_at: u32,
     }
 }
 
