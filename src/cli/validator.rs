@@ -320,17 +320,15 @@ struct ElectionsContext {
 }
 
 impl AppConfigValidationSingle {
-    #[tracing::instrument(
-        skip_all,
-        name = "elect_as_single",
-        fields(
+    async fn elect(self, keypair: ed25519_dalek::Keypair, ctx: ElectionsContext) -> Result<()> {
+        tracing::info!(
             election_id = ctx.election_id,
             address = %self.address,
             stake = %Ever(self.stake_per_round),
             stake_factor = ?self.stake_factor,
-        )
-    )]
-    async fn elect(self, keypair: ed25519_dalek::Keypair, ctx: ElectionsContext) -> Result<()> {
+            "election as single"
+        );
+
         let wallet = wallet::Wallet::new(-1, keypair, ctx.subscription)?;
         anyhow::ensure!(
             wallet.address() == &self.address,
@@ -394,18 +392,16 @@ impl AppConfigValidationSingle {
 }
 
 impl AppConfigValidationDePool {
-    #[tracing::instrument(
-        skip_all,
-        name = "elect_as_depool",
-        fields(
+    async fn elect(self, keypair: ed25519_dalek::Keypair, ctx: ElectionsContext) -> Result<()> {
+        tracing::info!(
             election_id = ctx.election_id,
             depool = %self.depool,
             depool_type = ?self.depool_type,
             owner = %self.owner,
             stake_factor = ?self.stake_factor,
-        )
-    )]
-    async fn elect(self, keypair: ed25519_dalek::Keypair, ctx: ElectionsContext) -> Result<()> {
+            "election as DePool"
+        );
+
         let wallet = wallet::Wallet::new(0, keypair, ctx.subscription.clone())?;
         anyhow::ensure!(
             wallet.address() == &self.owner,
