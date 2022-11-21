@@ -147,7 +147,7 @@ Type=simple
 Restart=always
 RestartSec=1
 User={user}
-ExecStart={stever_binary} --root {root_dir} validate
+ExecStart={stever_binary} --root {root_dir} validator
 
 [Install]
 WantedBy=multi-user.target
