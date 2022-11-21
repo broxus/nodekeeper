@@ -411,7 +411,7 @@ impl AppConfigValidationDePool {
         anyhow::ensure!(depool_info.proxies.len() == 2, "invalid DePool proxies");
 
         // Update depool
-        let (round_id, step) = self
+        let (round_id, step) = match self
             .update_depool(
                 &wallet,
                 &depool,
@@ -421,7 +421,14 @@ impl AppConfigValidationDePool {
                 &ctx.guard,
             )
             .await
-            .context("failed to update depool")?;
+            .context("failed to update depool")?
+        {
+            Some(round) => round,
+            None => {
+                tracing::info!("skipping round");
+                return Ok(());
+            }
+        };
 
         if step != depool::RoundStep::WaitingValidatorRequest {
             tracing::info!("depool is not waiting for the validator request");
@@ -481,10 +488,11 @@ impl AppConfigValidationDePool {
         mut depool_state: ton_block::AccountStuff,
         election_id: u32,
         guard: &Mutex<()>,
-    ) -> Result<(u64, depool::RoundStep)> {
+    ) -> Result<Option<(u64, depool::RoundStep)>> {
         const UPDATE_INTERVAL: Duration = Duration::from_secs(10);
 
         let mut attempts = 4;
+        let mut sent_ticktock = false;
         loop {
             // Get validator stakes info
             let participant_info = depool
@@ -540,9 +548,14 @@ impl AppConfigValidationDePool {
                 }
             }
 
-            // Return target round if it is configured
             if target_round.supposed_elected_at == election_id {
-                break Ok((target_round.id, target_round.step));
+                // Return target round if it is configured
+                break Ok(Some((target_round.id, target_round.step)));
+            } else if sent_ticktock
+                && target_round.completion_reason == depool::CompletionReason::FakeRound
+            {
+                // Skip initial fake round
+                break Ok(None);
             } else {
                 // Reduce attempts otherwise
                 attempts -= 1;
@@ -555,6 +568,7 @@ impl AppConfigValidationDePool {
                 .call(depool.ticktock()?)
                 .await
                 .context("failed to send ticktock")?;
+            sent_ticktock = true;
             tokio::time::sleep(UPDATE_INTERVAL).await;
 
             // Update depool state
