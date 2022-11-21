@@ -497,7 +497,7 @@ impl AppConfigValidationDePool {
         mut depool_state: ton_block::AccountStuff,
         ctx: &ElectionsContext,
     ) -> Result<Option<(u64, depool::RoundStep)>> {
-        const UPDATE_INTERVAL: Duration = Duration::from_secs(10);
+        const TICKTOCK_INTERVAL: Duration = Duration::from_secs(60);
 
         let mut attempts = 4;
         let mut sent_ticktock = false;
@@ -577,7 +577,7 @@ impl AppConfigValidationDePool {
                 .await
                 .context("failed to send ticktock")?;
             sent_ticktock = true;
-            tokio::time::sleep(UPDATE_INTERVAL).await;
+            tokio::time::sleep(TICKTOCK_INTERVAL).await;
 
             // Update depool state
             depool_state = depool
