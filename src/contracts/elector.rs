@@ -102,7 +102,7 @@ impl Elector {
 
         // Sign data
         let unsigned = UnsignedParticipantData {
-            election_id: election_id,
+            election_id,
             address,
             max_factor: stake_factor,
             public_key: ton_types::UInt256::from(perm_pubkey.to_bytes()),

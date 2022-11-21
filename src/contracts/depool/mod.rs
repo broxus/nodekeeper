@@ -122,33 +122,6 @@ impl DePool {
         Ok(())
     }
 
-    pub async fn terminate(&self) -> Result<()> {
-        let keypair = self.keypair.as_ref().context("DePool keypair not set")?;
-
-        self.subscription
-            .send_message_with_retires(move |timeout| {
-                let (expire_at, header) = make_default_headers(None, timeout);
-
-                let message = self.external_message_to_self(
-                    common::terminator()
-                        .encode_input(
-                            &header,
-                            &[],
-                            false,
-                            Some(keypair),
-                            Some(self.address.clone()),
-                        )
-                        .context("failed to encode termination message")?,
-                );
-
-                Ok((message, expire_at))
-            })
-            .await
-            .context("failed to send termination message")?;
-
-        Ok(())
-    }
-
     pub fn ticktock(&self) -> Result<InternalMessage> {
         Ok(self.internal_message_to_self(ONE_EVER, common::ticktock().encode_internal_input(&[])?))
     }
@@ -158,16 +131,6 @@ impl DePool {
             (amount as u128) + ONE_EVER / 2,
             &common::add_ordinary_stake()
                 .encode_internal_input(&[amount.token_value().named("stake")])?,
-        ))
-    }
-
-    pub fn participate_in_elections(
-        &self,
-        inputs: ParticipateInElectionsInputs,
-    ) -> Result<InternalMessage> {
-        Ok(self.internal_message_to_self(
-            ONE_EVER,
-            common::participate_in_elections().encode_internal_input(&inputs.pack())?,
         ))
     }
 
@@ -354,22 +317,6 @@ struct ConstructorInputs {
     participant_reward_fraction: u8,
 }
 
-#[derive(Clone, PackAbiPlain, KnownParamTypePlain)]
-pub struct ParticipateInElectionsInputs {
-    #[abi(uint64)]
-    pub query_id: u64,
-    #[abi(uint256)]
-    pub validator_key: ton_types::UInt256,
-    #[abi(uint32)]
-    pub stake_at: u32,
-    #[abi(uint32)]
-    pub max_factor: u32,
-    #[abi(uint256)]
-    pub adnl_addr: ton_types::UInt256,
-    #[abi(bytes)]
-    pub signature: Vec<u8>,
-}
-
 #[derive(Debug, Clone, UnpackAbiPlain, KnownParamTypePlain)]
 pub struct ParticipantInfo {
     #[abi(uint64)]
@@ -549,24 +496,9 @@ mod common {
         })
     }
 
-    pub fn participate_in_elections() -> &'static ton_abi::Function {
-        once!(ton_abi::Function, || {
-            FunctionBuilder::new("participateInElections")
-                .id(0x4E73744B)
-                .inputs(ParticipateInElectionsInputs::param_type())
-                .build()
-        })
-    }
-
     pub fn ticktock() -> &'static ton_abi::Function {
         once!(ton_abi::Function, || {
             FunctionBuilder::new("ticktock").build()
-        })
-    }
-
-    pub fn terminator() -> &'static ton_abi::Function {
-        once!(ton_abi::Function, || {
-            FunctionBuilder::new("terminator").build()
         })
     }
 
