@@ -1,6 +1,6 @@
 pub use self::app_config::{
-    AppConfig, AppConfigAdnl, AppConfigControl, AppConfigValidation, AppConfigValidationDePool,
-    AppConfigValidationSingle, DePoolType,
+    AppConfig, AppConfigAdnl, AppConfigControl, AppConfigDePoolDeploymentParams,
+    AppConfigValidator, AppConfigValidatorDePool, AppConfigValidatorSingle, DePoolType,
 };
 pub use self::global_config::GlobalConfig;
 pub use self::node_config::{NodeConfig, NodeConfigAdnl, NodeConfigControlServer, NodeLogConfig};

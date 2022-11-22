@@ -41,6 +41,20 @@ impl StoredKeys {
         inner(seed.as_ref())
     }
 
+    pub fn from_secret<T: AsRef<[u8]>>(secret: T) -> Result<Self> {
+        fn inner(secret: &[u8]) -> Result<StoredKeys> {
+            let secret = ed25519_dalek::SecretKey::from_bytes(secret)?;
+            let public = ed25519_dalek::PublicKey::from(&secret);
+            Ok(StoredKeys {
+                secret: secret.to_bytes(),
+                public: Some(public.to_bytes()),
+                seed: None,
+            })
+        }
+
+        inner(secret.as_ref())
+    }
+
     pub fn load_as_keypair<P: AsRef<Path>>(path: P) -> Result<ed25519_dalek::Keypair> {
         Ok(Self::load(path)?.as_keypair())
     }

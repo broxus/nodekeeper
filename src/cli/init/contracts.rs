@@ -1,6 +1,5 @@
-use std::future::Future;
 use std::path::Path;
-use std::sync::Arc;
+use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use argh::FromArgs;
@@ -10,17 +9,17 @@ use dialoguer::{Input, Select};
 
 use crate::cli::{CliContext, ProjectDirs};
 use crate::config::*;
+use crate::contracts::*;
 use crate::crypto;
-use crate::node_tcp_rpc::NodeTcpRpc;
-use crate::node_udp_rpc::NodeUdpRpc;
-use crate::subscription::Subscription;
 use crate::util::*;
+
+const DEFAULT_STAKE_FACTOR: f64 = 3.0;
 
 const DEFAULT_MIN_STAKE: u64 = 10;
 const DEFAULT_VALIDATOR_ASSURANCE: u64 = 10_000;
 const DEFAULT_PARTICIPANT_REWARD_FRACTION: u8 = 95;
 
-const DEFAULT_STRATEGIES_FACTORY: &str =
+const DEFAULT_STRATEGY_FACTORY: &str =
     "0:519a1205bd021e5e0aa4b64f5ab689bc383efb4f94f283eac78926da71cfe100";
 
 #[derive(FromArgs)]
@@ -39,7 +38,7 @@ impl Cmd {
         }
 
         // Check whether validation was already configured
-        if config.validation.is_some()
+        if config.validator.is_some()
             && !confirm(
                 theme,
                 false,
@@ -48,20 +47,6 @@ impl Cmd {
         {
             return Ok(());
         }
-
-        // Create RPC clients
-        let node_tcp_rpc = NodeTcpRpc::new(config.control()?)
-            .await
-            .context("failed to create node TCP client")?;
-        let node_udp_rpc = NodeUdpRpc::new(config.adnl()?)
-            .await
-            .context("failed to create node UDP client")?;
-
-        // Create subscription
-        let subscription = Subscription::new(node_tcp_rpc, node_udp_rpc);
-
-        // Check node status
-        subscription.ensure_ready().await?;
 
         // Select validator type
         match Select::with_theme(theme)
@@ -72,41 +57,36 @@ impl Cmd {
             .interact()?
         {
             // Prepare validator as a single node
-            0 => prepare_single_validator(theme, dirs, &mut config, subscription).await,
+            0 => prepare_single_validator(theme, dirs, &mut config),
             // Prepare validator as a depool
-            _ => prepare_depool_validator(theme, dirs, &mut config, subscription).await,
+            _ => prepare_depool_validator(theme, dirs, &mut config),
         }
     }
 }
 
-async fn prepare_single_validator(
+fn prepare_single_validator(
     theme: &dyn Theme,
     dirs: &ProjectDirs,
     app_config: &mut AppConfig,
-    subscrioption: Arc<Subscription>,
 ) -> Result<()> {
     use crate::contracts::*;
 
-    let mut steps = Steps::new(3);
+    const MIN_STAKE: u64 = 10_000 * ONE_EVER as u64;
+    const MAX_STAKE: u64 = 10_000_000 * ONE_EVER as u64;
 
-    // Fetch blockchain stakes config for input validation
-    let stakes_config = subscrioption
-        .get_blockchain_config()
-        .await
-        .context("failed to get blockchain config")?
-        .stakes_config()
-        .context("failed to get stakes config")?;
-    let min_stake = num::integer::div_ceil(stakes_config.min_stake.0, ONE_EVER);
-    let max_stake = num::integer::div_floor(stakes_config.max_stake.0, ONE_EVER);
+    let mut steps = Steps::new(2);
 
     // Prepare validator wallet
     steps.next("Creating validator wallet");
-    let keypair = prepare_keys(theme, "Validator wallet seed phrase", &dirs.validator_keys)?;
+    let (_, keypair) = KeysSelector {
+        theme,
+        prompt: "Validator wallet",
+        path: &dirs.validator_keys,
+        allow_new: true,
+    }
+    .interact()?;
 
-    let wallet = wallet::Wallet::new(-1, keypair, subscrioption)
-        .context("failed to create validator wallet")?;
-
-    print_important_value("Validator wallet address", wallet.address());
+    let wallet_address = wallet::compute_wallet_address(-1, &keypair.public);
 
     // Configure stake params
     steps.next("Configuring the stake");
@@ -114,67 +94,154 @@ async fn prepare_single_validator(
     // Configure stake per round
     let stake_per_round: u64 = Input::with_theme(theme)
         .with_prompt("Stake per round (EVER)")
-        .validate_with(|stake: &u64| match *stake as u128 {
-            x if x > max_stake => Err(format!("Too big stake (max stake is {max_stake} EVER)")),
-            x if x < min_stake => Err(format!("Too small stake (min stake is {min_stake} EVER)")),
+        .validate_with(|stake: &u64| match stake.saturating_mul(ONE_EVER as u64) {
+            x if x > MAX_STAKE => Err(format!(
+                "Too big stake (max stake is {} EVER)",
+                Ever(MAX_STAKE)
+            )),
+            x if x < MIN_STAKE => Err(format!(
+                "Too small stake (min stake is {} EVER)",
+                Ever(MIN_STAKE)
+            )),
             _ => Ok(()),
         })
         .interact_text()?;
     let stake_per_round = stake_per_round.saturating_mul(ONE_EVER as u64);
 
+    // Configure stake factor
+    let stake_factor = configure_stake_factor(theme)?;
+
     // Save config
-    app_config.validation = Some(AppConfigValidation::Single(AppConfigValidationSingle {
-        address: wallet.address().clone(),
+    app_config.validator = Some(AppConfigValidator::Single(AppConfigValidatorSingle {
+        address: wallet_address.clone(),
         stake_per_round,
-        stake_factor: None,
+        stake_factor: Some(stake_factor),
     }));
     dirs.store_app_config(app_config)?;
 
-    // Wait until validator wallet will have enough funds for staking
-    steps.next("Replenishing the balance");
-
-    let balance = wait_for_balance(
-        "Waiting for the initial balance",
-        stake_per_round as u128 * 2 + 10 * ONE_EVER,
-        || wallet.get_balance(),
-    )
-    .await?;
-    println!("Validator wallet balance: {}", Ever(balance));
-
     // Done
     steps.next("Validator configured successfully. Great!");
+
+    let target_balance = stake_per_round as u128 * 2 + Wallet::INITIAL_BALANCE;
+
+    println!(
+        "\n{}\n{}\n\n{} {}{}",
+        console::style("Validator wallet address:").green().bold(),
+        console::style(wallet_address).bold(),
+        console::style("Required validator wallet balance:")
+            .green()
+            .bold(),
+        console::style(format!("{} EVER", Ever(target_balance))).bold(),
+        console::style(format!(
+            "\n  • {} EVER, maintenance balance\
+             \n  • 2 x {} EVER, stakes for each round",
+            Ever(Wallet::INITIAL_BALANCE),
+            Ever(target_balance)
+        ))
+        .dim()
+    );
+
     Ok(())
 }
 
-async fn prepare_depool_validator(
+fn prepare_depool_validator(
     theme: &dyn Theme,
     dirs: &ProjectDirs,
     app_config: &mut AppConfig,
-    subscription: Arc<Subscription>,
 ) -> Result<()> {
     use crate::contracts::*;
 
-    const VALIDATOR_MIN_BALANCE: u128 = 10 * ONE_EVER;
-    const DEPOOL_MIN_BALANCE: u128 = 30 * ONE_EVER;
+    let (mut steps, params) = match Select::with_theme(theme)
+        .item("Deploy new DePool")
+        .item("Use existing DePool")
+        .default(0)
+        .interact()?
+    {
+        0 => prepare_new_depool(theme, dirs)?,
+        _ => prepare_existing_depool(theme, dirs)?,
+    };
 
-    let mut steps = Steps::new(4);
-    let default_strategies_factory: ton_block::MsgAddressInt =
-        DEFAULT_STRATEGIES_FACTORY.parse().unwrap();
+    // Save config
+    app_config.validator = Some(AppConfigValidator::DePool(Box::new(params.clone())));
+    dirs.store_app_config(app_config)?;
+
+    // Done
+    steps.next("Everything is ready for the validation!");
+
+    println!(
+        "\n{}\n{}\n\n{}\n{}",
+        style("Validator wallet address:").green().bold(),
+        style(params.owner).bold(),
+        style("DePool address:").green().bold(),
+        style(params.depool).bold(),
+    );
+
+    if let Some(deployment) = params.deploy {
+        let strategy_fee = StrategyFactory::DEPLOYMENT_FEE;
+
+        let mut target_balance = deployment.validator_assurance as u128 * 2
+            + Wallet::INITIAL_BALANCE
+            + DePool::INITIAL_BALANCE;
+
+        let mut factory_deployment_note = "".to_owned();
+        if params.strategy_factory.is_some() {
+            target_balance += strategy_fee;
+            factory_deployment_note =
+                format!("\n  • {} EVER, strategy deployment fee", Ever(strategy_fee));
+        }
+
+        println!(
+            "\n{} {}{}",
+            style("Required validator wallet balance:").green().bold(),
+            style(format!("{} EVER", Ever(target_balance))).bold(),
+            style(format!(
+                "\n  • {} EVER, maintenance balance\
+                 \n  • {} EVER, DePool deployment fee\
+                 {factory_deployment_note}\
+                 \n  • 2 x {} EVER, stakes for each round",
+                Ever(Wallet::INITIAL_BALANCE),
+                Ever(DePool::INITIAL_BALANCE),
+                Ever(deployment.validator_assurance),
+            ))
+            .dim()
+        );
+    }
+
+    Ok(())
+}
+
+fn prepare_new_depool(
+    theme: &dyn Theme,
+    dirs: &ProjectDirs,
+) -> Result<(Steps, AppConfigValidatorDePool)> {
+    let mut steps = Steps::new(2);
 
     // Prepare validator wallet
     steps.next("Creating validator wallet");
-    let wallet_keypair = prepare_keys(theme, "Validator wallet seed phrase", &dirs.validator_keys)?;
 
-    let wallet = wallet::Wallet::new(0, wallet_keypair, subscription.clone())
-        .context("failed to create validator wallet")?;
+    let (is_new_wallet, wallet_keypair) = KeysSelector {
+        theme,
+        prompt: "Validator wallet",
+        path: &dirs.validator_keys,
+        allow_new: true,
+    }
+    .interact()?;
 
-    print_important_value("Validator wallet address", wallet.address());
+    // TODO: Select wallet type
+
+    let wallet_address = wallet::compute_wallet_address(0, &wallet_keypair.public);
 
     // Create depool
-    steps.next("Creating depool");
+    steps.next("Creating DePool");
 
     // Generate depool keys
-    let depool_keypair = prepare_keys(theme, "DePool seed phrase", &dirs.depool_keys)?;
+    let (is_new_depool, depool_keypair) = KeysSelector {
+        theme,
+        prompt: "DePool",
+        path: &dirs.depool_keys,
+        allow_new: true,
+    }
+    .interact()?;
 
     // Select depool type
     let depool_type = match Select::with_theme(theme)
@@ -188,387 +255,376 @@ async fn prepare_depool_validator(
         _ => DePoolType::DefaultV3,
     };
 
-    // Create depool wrapper
-    let depool = depool::DePool::from_keypair(depool_type, depool_keypair, subscription.clone())
-        .context("failed to create DePool")?;
+    // Compute depool address
+    let depool_address = depool_type
+        .compute_depool_address(&depool_keypair.public)
+        .context("failed to compute DePool address")?;
 
-    print_important_value("DePool address", depool.address());
+    // Configure min participants stake
+    let min_stake: u64 = Input::with_theme(theme)
+        .with_prompt("Minimal participant stake (EVER)")
+        .default(DEFAULT_MIN_STAKE)
+        .validate_with(|value: &u64| match *value {
+            x if x < 10 => Err("Minimal stake is too small (< 10 EVER)"),
+            _ => Ok(()),
+        })
+        .interact_text()?;
+    let min_stake = min_stake.saturating_mul(ONE_EVER as u64);
 
-    // Save config
-    app_config.validation = Some(AppConfigValidation::DePool(Box::new(
-        AppConfigValidationDePool {
-            owner: wallet.address().clone(),
-            depool: depool.address().clone(),
-            depool_type,
-            strategy: None,
-            stake_factor: None,
-        },
-    )));
-    dirs.store_app_config(app_config)?;
+    // Configure validator assurance
+    let validator_assurance: u64 = Input::with_theme(theme)
+        .with_prompt("Validator assurance (EVER)")
+        .default(DEFAULT_VALIDATOR_ASSURANCE)
+        .validate_with(|value: &u64| match *value {
+            x if x < 10 => Err("Too small validator assurance (< 10 EVER)"),
+            _ => Ok(()),
+        })
+        .interact_text()?;
+    let validator_assurance = validator_assurance.saturating_mul(ONE_EVER as u64);
 
-    // Configure and deploy DePool
-    steps.next("Configuring DePool");
+    // Configure participant reward fraction
+    let participant_reward_fraction: u8 = Input::with_theme(theme)
+        .with_prompt("Participant reward fraction (%, 1..99)")
+        .default(DEFAULT_PARTICIPANT_REWARD_FRACTION)
+        .validate_with(|value: &u8| match *value {
+            x if x < 1 => Err("Too small fraction (< 1%)"),
+            x if x > 99 => Err("Too big fraction (> 99%)"),
+            _ => Ok(()),
+        })
+        .interact_text()?;
 
-    if depool
-        .is_deployed()
-        .await
-        .context("failed to check DePool")?
-    {
-        println!("DePool was already deployed");
-    } else {
-        // Deploy and configure depool
+    // Configure stake factor
+    let stake_factor = configure_stake_factor(theme)?;
 
-        // Get current depool balance
-        let depool_balance = depool
-            .get_balance()
-            .await
-            .context("failed to get DePool balance")?
-            .unwrap_or_default();
+    let mut params = AppConfigValidatorDePool {
+        owner: wallet_address,
+        depool: depool_address,
+        depool_type,
+        stake_factor: Some(stake_factor),
+        strategy_factory: None,
+        strategy: None,
+        deploy: Some(AppConfigDePoolDeploymentParams {
+            min_stake,
+            validator_assurance,
+            participant_reward_fraction,
+        }),
+    };
 
-        // Configure min participants stake
-        let min_stake: u64 = Input::with_theme(theme)
-            .with_prompt("Minimal participant stake (EVER)")
-            .default(DEFAULT_MIN_STAKE)
-            .validate_with(|value: &u64| match *value {
-                x if x < 10 => Err("Minimal stake is too small (< 10 EVER)"),
-                _ => Ok(()),
-            })
-            .interact_text()?;
-        let min_stake = min_stake.saturating_mul(ONE_EVER as u64);
-
-        // Configure validator assurance
-        let validator_assurance: u64 = Input::with_theme(theme)
-            .with_prompt("Validator assurance (EVER)")
-            .default(DEFAULT_VALIDATOR_ASSURANCE)
-            .validate_with(|value: &u64| match *value {
-                x if x < 10 => Err("Too small validator assurance (< 10 EVER)"),
-                _ => Ok(()),
-            })
-            .interact_text()?;
-        let validator_assurance = validator_assurance.saturating_mul(ONE_EVER as u64);
-
-        // Configure participant reward fraction
-        let participant_reward_fraction: u8 = Input::with_theme(theme)
-            .with_prompt("Participant reward fraction (%, 1..99)")
-            .default(DEFAULT_PARTICIPANT_REWARD_FRACTION)
-            .validate_with(|value: &u8| match *value {
-                x if x < 1 => Err("Too small fraction (< 1%)"),
-                x if x > 99 => Err("Too big fraction (> 99%)"),
-                _ => Ok(()),
-            })
-            .interact_text()?;
-
-        // Compute remaining depool balance
-        let depool_initial_balance = DEPOOL_MIN_BALANCE
-            .checked_sub(depool_balance)
-            .and_then(|diff| (diff > 0).then_some(std::cmp::max(diff, ONE_EVER)));
-
-        // Wait until validator wallet will have enough funds
-        let balance = wait_for_balance(
-            "Waiting for the initial validator balance",
-            VALIDATOR_MIN_BALANCE + depool_initial_balance.unwrap_or_default(),
-            || wallet.get_balance(),
-        )
-        .await?;
-        println!("Validator wallet balance: {}", Ever(balance));
-
-        // Deploying depool
-        {
-            let spinner = Spinner::start("Transferring funds to the DePool contract");
-
-            // Transfer initial funds to the depool (if its balance is not enough)
-            if let Some(balance) = depool_initial_balance {
-                wallet
-                    .call(InternalMessage::empty(depool.address().clone(), balance))
-                    .await
-                    .context("failed to transfer funds to the DePool contract")?;
-            }
-
-            // Call depool constructor
-            spinner.set_message("Deploying DePool contract");
-            depool
-                .deploy(depool::DePoolInitParams {
-                    min_stake,
-                    validator_assurance,
-                    owner: wallet.address().clone(),
-                    participant_reward_fraction,
-                })
-                .await
-                .context("failed to deploy DePool")?;
-        }
-
-        // Done
-        println!("DePool contract was successfully deployed!");
-    }
-
-    // Handle stEver depool case
+    // Configure stEVER strategies stuff
     if let DePoolType::StEver = depool_type {
-        // Get allowed participants
-        let depool_state = depool.get_state().await?;
-        let allowed_participants = depool
-            .get_allowed_participants(&depool_state)
-            .context("failed to get allowed participant")?;
-
-        if allowed_participants.len() < 2 {
-            // Try select stever depool strategy
-            let (mut spinner, strategy) = loop {
-                match Select::with_theme(theme)
-                    .item("Deploy new stEVER DePool strategy")
-                    .item("Use existing stEVER DePool strategy")
-                    .default(0)
-                    .interact()?
-                {
-                    // Deploy new stever depool strategy
-                    0 => {
-                        // Determine strategies factory
-                        let AddressInput(factory) = Input::with_theme(theme)
-                            .with_prompt("Specify strategies factory")
-                            .default(AddressInput(default_strategies_factory))
-                            .validate_with(|addr: &AddressInput| {
-                                let address = addr.0.clone();
-                                let subscription = subscription.clone();
-                                block_in_place(async move {
-                                    strategy_factory::StrategyFactory::new(address, subscription)
-                                        .get_details()
-                                        .await
-                                        .map(|_| ())
-                                })
-                            })
-                            .interact_text()?;
-
-                        // Create factory wrapper
-                        let factory = strategy_factory::StrategyFactory::new(factory, subscription);
-
-                        // Prepare deployment message
-                        let deployment_message = factory.deploy_strategy(depool.address())?;
-
-                        // Wait until validator wallet will have enough funds
-                        wait_for_balance(
-                            "Waiting for some funds to deploy stEVER DePool strategy",
-                            deployment_message.amount + ONE_EVER,
-                            || wallet.get_balance(),
-                        )
-                        .await?;
-
-                        // Send an internal message to the factory
-                        let spinner = Spinner::start("Deploying stEVER DePool strategy");
-                        let depool_strategy = wallet
-                            .call(deployment_message)
-                            .await
-                            .and_then(strategy_factory::StrategyFactory::extract_strategy_address)
-                            .context("failed to deploy stEVER DePool strategy")?;
-
-                        spinner.println(format!(
-                            "{}\n{}\n\n",
-                            style("Strategy address:").green().bold(),
-                            style(&depool_strategy).bold()
-                        ));
-
-                        // Stever depool strategy is now deployed
-                        break (Some(spinner), depool_strategy);
-                    }
-                    _ => {
-                        // Ask for existing strategy
-                        let OptionalAddressInput(strategy) = Input::with_theme(theme)
-                            .with_prompt("Specify strategy address")
-                            .allow_empty(true)
-                            .validate_with(|addr: &OptionalAddressInput| {
-                                let OptionalAddressInput(Some(address)) = addr else { return Ok(()) };
-
-                                // Check whether strategy exists
-                                match block_in_place(async {
-                                    strategy::Strategy::new(address.clone(), subscription.clone())
-                                        .get_details()
-                                        .await
-                                        .context("failed to get details")
-                                }) {
-                                    // Check whether strategy is for the same depool
-                                    Ok(details) if &details.depool != depool.address() => {
-                                        Err("Strategy was deployed for the different DePool".to_owned())
-                                    }
-                                    Ok(_) => Ok(()),
-                                    Err(e) => Err(format!("Invalid strategy: {e:?}")),
-                                }
-                            })
-                            .interact_text()?;
-
-                        match strategy {
-                            // Use the specified strategy
-                            Some(strategy) => break (None, strategy),
-                            // Return back to the selection prompt
-                            None => continue,
-                        }
-                    }
-                }
-            };
-
-            let spinner = spinner.get_or_insert_with(|| Spinner::start(""));
-            spinner.set_message("Updating DePool info");
-
-            // Set stever depool strategy as an allowed participant
-            wallet
-                .call(depool.set_allowed_participant(&strategy)?)
-                .await
-                .context("failed to set update DePool strategy")?;
-
-            println!("DePool contract was successfully deployed!");
-        }
-    }
-
-    // Check validator stake
-    steps.next("Checking validator's stake");
-
-    // Get full depool info
-    let depool_state = depool.get_state().await?;
-    let depool_info = depool
-        .get_info(&depool_state)
-        .context("failed to get DePool info")?;
-    let rounds = depool.get_rounds(&depool_state)?;
-
-    // Check if validator is a depool participant
-    let participant_info = depool
-        .get_participant_info(&depool_state, wallet.address())
-        .context("failed to get participant info")?;
-
-    if let Some(participant_info) = participant_info {
-        anyhow::ensure!(rounds.len() == 4, "invalid DePool rounds");
-
-        // Compute remaining validator assurance
-        let mut remaining = 0;
-        for next_round in rounds.into_keys().skip(2) {
-            let validator_stake = participant_info.compute_total_stake(next_round);
-            if let Some(diff) = depool_info.validator_assurance.checked_sub(validator_stake) {
-                remaining += diff;
-            }
-        }
-
-        if remaining > 0 {
-            let remaining = std::cmp::max(ONE_EVER, remaining as u128) + ONE_EVER;
-            if !confirm(
-                theme,
-                true,
-                "Validator stake is too small. Prepare balance for the ordinary stake?",
-            )? {
-                return Ok(());
-            }
-
-            // Toupup validator wallet
-            wait_for_balance("Waiting for the stake balance", remaining, || {
-                wallet.get_balance()
-            })
-            .await?;
-        }
-    } else {
-        let target_balance = depool_info.validator_assurance as u128 * 2 + ONE_EVER;
-
-        // Check if validator balance is enough for the validator assurance
-        let validator_balance = wallet
-            .get_balance()
-            .await
-            .context("failed to get validator wallet balance")?;
-
-        if !matches!(validator_balance, Some(balance) if balance >= target_balance) {
-            if !confirm(
-                theme,
-                true,
-                "Validator is not a DePool participant yet. Prepare ordinary stake?",
-            )? {
-                return Ok(());
-            }
-
-            // Toupup validator wallet
-            wait_for_balance("Waiting for the stake balance", target_balance, || {
-                wallet.get_balance()
-            })
-            .await?;
-        }
+        let strategy = if is_new_wallet || is_new_depool {
+            // Always deploy new strategy is new keys were generated
+            StrategyAction::DeployNew.run(theme)?
+        } else {
+            // Allow specifying existing strategy otherwise
+            let items = [StrategyAction::DeployNew, StrategyAction::SetExisting];
+            let action = Select::with_theme(theme)
+                .items(&items)
+                .default(0)
+                .interact()?;
+            items[action].run(theme)?
+        };
+        params.strategy_factory = strategy.factory;
+        params.strategy = strategy.existing;
     }
 
     // Done
-    steps.next("Everything is ready for the validation!");
-
-    Ok(())
+    Ok((steps, params))
 }
 
-async fn wait_for_balance<T, F>(prompt: T, target: u128, mut f: impl FnMut() -> F) -> Result<u128>
-where
-    T: std::fmt::Display,
-    F: Future<Output = Result<Option<u128>>>,
-{
-    let spinner = Spinner::start(format!("{prompt}: fetching balance..."));
-    let interval = std::time::Duration::from_secs(1);
-    loop {
-        match f().await? {
-            Some(balance) if balance >= target => break Ok(balance),
-            Some(balance) => spinner.set_message(format!(
-                "{prompt}: account balance is not enough {}",
-                note(format!("{} / {} EVER", Ever(balance), Ever(target)))
-            )),
-            None => spinner.set_message(format!(
-                "{prompt}: account does not exist yet {}",
-                note(format!("0 / {} EVER", Ever(target)))
-            )),
-        }
-        tokio::time::sleep(interval).await;
-    }
-}
-
-fn prepare_keys<P: AsRef<Path>>(
+fn prepare_existing_depool(
     theme: &dyn Theme,
-    name: &str,
-    path: P,
-) -> Result<ed25519_dalek::Keypair> {
-    selector_variant!(Action, {
-        Existing => "Use existing keys",
-        Generate => "Generate new keys",
-        Import => "Import seed",
-    });
+    dirs: &ProjectDirs,
+) -> Result<(Steps, AppConfigValidatorDePool)> {
+    let mut steps = Steps::new(2);
 
-    let path = path.as_ref();
+    // Prepare validator wallet
+    steps.next("Creating validator wallet");
 
-    let mut items = Action::all();
-    if !path.exists() {
-        items.remove(0);
+    let (_, wallet_keypair) = KeysSelector {
+        theme,
+        prompt: "Validator wallet seed phrase",
+        path: &dirs.validator_keys,
+        allow_new: false,
+    }
+    .interact()?;
+
+    // TODO: Select wallet type
+
+    let wallet_address = wallet::compute_wallet_address(0, &wallet_keypair.public);
+
+    // Prepare validator wallet
+    steps.next("Creating DePool");
+
+    // Configure existing depool address
+    let AddressInput(depool_address) = Input::with_theme(theme)
+        .with_prompt("Specify existing DePool address")
+        .interact_text()?;
+
+    // Generate depool keys
+    let (_, depool_keypair) = KeysSelector {
+        theme,
+        prompt: "DePool seed phrase",
+        path: &dirs.depool_keys,
+        allow_new: false,
+    }
+    .interact()?;
+
+    // Guess depool type from pubkey and the specified address
+    let depool_type = DePoolType::guess(&depool_address, &depool_keypair.public)
+        .context("failed to guess depool type")?
+        .context("invalid keys or unknown DePool contract")?;
+
+    // Configure stake factor
+    let stake_factor = configure_stake_factor(theme)?;
+
+    // Done
+    let mut params = AppConfigValidatorDePool {
+        owner: wallet_address,
+        depool: depool_address,
+        depool_type,
+        stake_factor: Some(stake_factor),
+        strategy_factory: None,
+        strategy: None,
+        deploy: None,
+    };
+
+    // Configure stEVER strategies stuff
+    if let DePoolType::StEver = depool_type {
+        let items = StrategyAction::all();
+        let action = Select::with_theme(theme)
+            .items(&items)
+            .default(0)
+            .interact()?;
+        let strategy = items[action].run(theme)?;
+        params.strategy_factory = strategy.factory;
+        params.strategy = strategy.existing;
     }
 
-    let mut select = Select::with_theme(theme);
-    select.items(&items).default(0);
+    // Done
+    Ok((steps, params))
+}
 
-    let store_keys = |keys: &StoredKeys| -> Result<bool> {
-        if path.exists() && !confirm(theme, false, "Overwrite existing keys?")? {
-            return Ok(false);
+impl DePoolType {
+    fn guess(
+        address: &ton_block::MsgAddressInt,
+        pubkey: &ed25519_dalek::PublicKey,
+    ) -> Result<Option<Self>> {
+        for ty in [Self::DefaultV3, Self::StEver] {
+            if address == &ty.compute_depool_address(pubkey)? {
+                return Ok(Some(ty));
+            }
         }
-        keys.store(path)?;
-        Ok(true)
-    };
+        Ok(None)
+    }
+}
 
-    let stored_keys = loop {
-        match items[select.interact()?] {
-            Action::Existing => match StoredKeys::load(path) {
-                Ok(keys) => break keys,
-                Err(e) => {
-                    print_error(format!("failed to load existing keys: {e:?}"));
-                    continue;
-                }
+fn configure_stake_factor(theme: &dyn Theme) -> Result<u32> {
+    const MIN_STAKE_FACTOR: f64 = 1.0;
+    const MAX_STAKE_FACTOR: f64 = 3.0;
+
+    fn to_factor_repr(factor: f64) -> u32 {
+        (factor * 65536.0) as u32
+    }
+
+    // Configure factor
+    let stake_factor: f64 = Input::with_theme(theme)
+        .with_prompt("Stake factor")
+        .with_initial_text(DEFAULT_STAKE_FACTOR.to_string())
+        .validate_with(|factor: &f64| match *factor {
+            x if x > MAX_STAKE_FACTOR => {
+                Err(format!("Too big stake factor (max is {MAX_STAKE_FACTOR})"))
+            }
+            x if x < MIN_STAKE_FACTOR => Err(format!(
+                "Too small stake factor (min is {MIN_STAKE_FACTOR})"
+            )),
+            _ => Ok::<_, String>(()),
+        })
+        .interact_text()?;
+    Ok(std::cmp::min(
+        to_factor_repr(stake_factor),
+        to_factor_repr(MAX_STAKE_FACTOR),
+    ))
+}
+
+selector_variant!(StrategyAction, {
+    Skip => "Leave as is",
+    DeployNew => "Deploy new stEVER DePool strategy",
+    SetExisting => "Set existing stEVER DePool strategy",
+});
+
+impl StrategyAction {
+    fn run(self, theme: &dyn Theme) -> Result<Strategy> {
+        let default_strategy_factory: ton_block::MsgAddressInt =
+            DEFAULT_STRATEGY_FACTORY.parse().unwrap();
+
+        Ok(match self {
+            Self::Skip => Strategy {
+                factory: None,
+                existing: None,
             },
-            Action::Generate => {
-                let keys = StoredKeys::generate()?;
-                let true = store_keys(&keys)? else { continue; };
-                break keys;
-            }
-            Action::Import => {
-                let seed = Input::with_theme(theme)
-                    .with_prompt(name)
-                    .validate_with(|phrase: &String| {
-                        crypto::validate_phrase(phrase, StoredKeys::DEFAULT_MNEMONIC_TYPE)
-                    })
+            Self::DeployNew => {
+                let AddressInput(factory) = Input::with_theme(theme)
+                    .with_prompt("Specify stEVER strategy factory")
+                    .default(AddressInput(default_strategy_factory))
                     .interact_text()?;
-                let keys = StoredKeys::from_seed(seed)?;
-                let true = store_keys(&keys)? else { continue; };
-                break keys;
+
+                Strategy {
+                    factory: Some(factory),
+                    existing: None,
+                }
+            }
+            Self::SetExisting => {
+                println!(
+                    "NOTE: Specified strategy address must be deployed \
+                    for the current DePool"
+                );
+
+                let AddressInput(existing) = Input::with_theme(theme)
+                    .with_prompt("Specify strategy address")
+                    .interact_text()?;
+
+                Strategy {
+                    factory: None,
+                    existing: Some(existing),
+                }
+            }
+        })
+    }
+}
+
+struct Strategy {
+    factory: Option<ton_block::MsgAddressInt>,
+    existing: Option<ton_block::MsgAddressInt>,
+}
+
+struct KeysSelector<'a, P> {
+    theme: &'a dyn Theme,
+    prompt: &'a str,
+    path: P,
+    allow_new: bool,
+}
+
+impl<P: AsRef<Path>> KeysSelector<'_, P> {
+    fn interact(self) -> Result<(bool, ed25519_dalek::Keypair)> {
+        selector_variant!(Action, {
+            Existing => "Use existing keys",
+            Generate => "Generate new keys",
+            Import => "Import seed",
+        });
+
+        let path = self.path.as_ref();
+
+        // Helper method
+        let store_keys = |keys: &StoredKeys| -> Result<bool> {
+            if path.exists() && !confirm(self.theme, false, "Overwrite existing keys?")? {
+                return Ok(false);
+            }
+            keys.store(path)?;
+            Ok(true)
+        };
+
+        // Construct selector
+        let mut items = Vec::new();
+        if path.exists() {
+            items.push(Action::Existing);
+        }
+        if self.allow_new {
+            items.push(Action::Generate);
+        }
+        items.push(Action::Import);
+
+        let mut select = Select::with_theme(self.theme);
+        select.items(&items).default(0);
+
+        // Try asking user until he selects a correct variant
+        let (is_new, stored_keys) = loop {
+            // Determine input action
+            let action = if items.len() > 1 {
+                items[select.interact()?]
+            } else {
+                items[0]
+            };
+
+            // Do action
+            match action {
+                Action::Existing => match StoredKeys::load(path) {
+                    Ok(keys) => break (false, keys),
+                    Err(e) => {
+                        print_error(format!("failed to load existing keys: {e:?}"));
+                        continue;
+                    }
+                },
+                Action::Generate => {
+                    let keys = StoredKeys::generate()?;
+                    if !store_keys(&keys)? {
+                        continue;
+                    }
+                    break (true, keys);
+                }
+                Action::Import => {
+                    let seed: SeedOrSecretInput = Input::with_theme(self.theme)
+                        .with_prompt(format!("{} seed phrase or secret", self.prompt))
+                        .interact_text()?;
+                    let keys = seed.try_into_stored_keys()?;
+                    if !store_keys(&keys)? {
+                        continue;
+                    }
+                    break (false, keys);
+                }
+            }
+        };
+
+        Ok((is_new, stored_keys.as_keypair()))
+    }
+}
+
+#[derive(Clone)]
+pub enum SeedOrSecretInput {
+    Seed(String),
+    Secret([u8; 32]),
+}
+
+impl SeedOrSecretInput {
+    fn try_into_stored_keys(self) -> Result<StoredKeys> {
+        match self {
+            Self::Seed(seed) => StoredKeys::from_seed(seed),
+            Self::Secret(secret) => StoredKeys::from_secret(secret),
+        }
+    }
+}
+
+impl std::fmt::Display for SeedOrSecretInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Seed(seed) => seed.fmt(f),
+            Self::Secret(secret) => hex::encode(secret).fmt(f),
+        }
+    }
+}
+
+impl FromStr for SeedOrSecretInput {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+
+        if !s.contains(' ') {
+            let hex = match s.len() {
+                64 => Some(hex::decode(s).ok()),
+                44 => Some(base64::decode(s).ok()),
+                _ => None,
+            };
+
+            if let Some(hex) = hex {
+                let data = hex
+                    .and_then(|data| data.try_into().ok())
+                    .context("invalid secret key")?;
+                return Ok(Self::Secret(data));
             }
         }
-    };
 
-    Ok(stored_keys.as_keypair())
+        crypto::validate_phrase(s, StoredKeys::DEFAULT_MNEMONIC_TYPE)?;
+        Ok(Self::Seed(s.to_owned()))
+    }
 }

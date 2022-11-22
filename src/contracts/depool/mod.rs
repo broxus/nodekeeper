@@ -31,6 +31,8 @@ pub struct DePool {
 }
 
 impl DePool {
+    pub const INITIAL_BALANCE: u128 = 30 * ONE_EVER;
+
     pub fn new(
         ty: DePoolType,
         address: ton_block::MsgAddressInt,
@@ -44,23 +46,18 @@ impl DePool {
         }
     }
 
-    pub fn from_keypair(
-        ty: DePoolType,
-        keypair: ed25519_dalek::Keypair,
-        subscription: Arc<Subscription>,
-    ) -> Result<Self> {
-        let address = ty.compute_depool_address(&keypair.public)?;
-
-        Ok(Self {
-            ty,
-            keypair: Some(keypair),
-            address,
-            subscription,
-        })
-    }
-
     pub fn address(&self) -> &ton_block::MsgAddressInt {
         &self.address
+    }
+
+    pub fn set_keypair(&mut self, keypair: ed25519_dalek::Keypair) -> Result<()> {
+        let computed_address = self.ty.compute_depool_address(&keypair.public)?;
+        anyhow::ensure!(
+            computed_address == self.address,
+            "wrong DePool address or keys"
+        );
+        self.keypair = Some(keypair);
+        Ok(())
     }
 
     pub async fn is_deployed(&self) -> Result<bool> {

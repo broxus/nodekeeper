@@ -21,7 +21,7 @@ pub struct AppConfig {
     /// ADNL config
     pub adnl: Option<AppConfigAdnl>,
     /// Validation config
-    pub validation: Option<AppConfigValidation>,
+    pub validator: Option<AppConfigValidator>,
 }
 
 impl AppConfig {
@@ -41,10 +41,6 @@ impl AppConfig {
 
     pub fn adnl(&self) -> Result<&AppConfigAdnl> {
         self.adnl.as_ref().context("adnl config is empty")
-    }
-
-    pub fn take_validation(&mut self) -> Result<AppConfigValidation> {
-        self.validation.take().context("validation config is empty")
     }
 }
 
@@ -105,22 +101,22 @@ pub struct AppConfigAdnl {
     pub zerostate_file_hash: [u8; 32],
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "lowercase", tag = "type")]
-pub enum AppConfigValidation {
-    Single(AppConfigValidationSingle),
-    DePool(Box<AppConfigValidationDePool>),
+pub enum AppConfigValidator {
+    Single(AppConfigValidatorSingle),
+    DePool(Box<AppConfigValidatorDePool>),
 }
 
-impl AppConfigValidation {
+impl AppConfigValidator {
     pub fn is_single(&self) -> bool {
         matches!(self, Self::Single(_))
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct AppConfigValidationSingle {
+pub struct AppConfigValidatorSingle {
     #[serde(with = "serde_mc_address")]
     pub address: ton_block::MsgAddressInt,
     #[serde(with = "serde_string_or_number")]
@@ -129,14 +125,22 @@ pub struct AppConfigValidationSingle {
     pub stake_factor: Option<u32>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct AppConfigValidationDePool {
+pub struct AppConfigValidatorDePool {
     #[serde(with = "serde_string")]
     pub owner: ton_block::MsgAddressInt,
     #[serde(with = "serde_string")]
     pub depool: ton_block::MsgAddressInt,
     pub depool_type: DePoolType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stake_factor: Option<u32>,
+    #[serde(
+        default,
+        with = "serde_optional_string",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub strategy_factory: Option<ton_block::MsgAddressInt>,
     #[serde(
         default,
         with = "serde_optional_string",
@@ -144,10 +148,19 @@ pub struct AppConfigValidationDePool {
     )]
     pub strategy: Option<ton_block::MsgAddressInt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stake_factor: Option<u32>,
+    pub deploy: Option<AppConfigDePoolDeploymentParams>,
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AppConfigDePoolDeploymentParams {
+    #[serde(with = "serde_string_or_number")]
+    pub min_stake: u64,
+    #[serde(with = "serde_string_or_number")]
+    pub validator_assurance: u64,
+    pub participant_reward_fraction: u8,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum DePoolType {
     #[serde(rename = "default_v3")]
     DefaultV3,

@@ -5,7 +5,7 @@ use nekoton_abi::{FunctionBuilder, KnownParamTypePlain, PackAbiPlain};
 use ton_abi::contract::ABI_VERSION_2_3;
 use ton_block::{Deserializable, GetRepresentationHash};
 
-use super::InternalMessage;
+use super::{InternalMessage, ONE_EVER};
 use crate::subscription::Subscription;
 use crate::util::{make_default_headers, TransactionWithHash};
 
@@ -16,18 +16,18 @@ pub struct Wallet {
 }
 
 impl Wallet {
+    pub const INITIAL_BALANCE: u128 = 10 * ONE_EVER;
+
     pub fn new(
         workchain_id: i8,
         keypair: ed25519_dalek::Keypair,
         subscription: Arc<Subscription>,
-    ) -> Result<Self> {
-        let address = compute_wallet_address(workchain_id, &keypair.public)
-            .context("failed to compute wallet address")?;
-        Ok(Self {
+    ) -> Self {
+        Self {
+            address: compute_wallet_address(workchain_id, &keypair.public),
             keypair,
-            address,
             subscription,
-        })
+        }
     }
 
     pub fn address(&self) -> &ton_block::MsgAddressInt {
@@ -150,10 +150,14 @@ impl Wallet {
 pub fn compute_wallet_address(
     workchain_id: i8,
     pubkey: &ed25519_dalek::PublicKey,
-) -> Result<ton_block::MsgAddressInt> {
-    let hash = make_state_init(pubkey).and_then(|state| state.hash())?;
-    Ok(ton_block::MsgAddressInt::AddrStd(
-        ton_block::MsgAddrStd::with_address(None, workchain_id, hash.into()),
+) -> ton_block::MsgAddressInt {
+    let hash = make_state_init(pubkey)
+        .and_then(|state| state.hash())
+        .unwrap();
+    ton_block::MsgAddressInt::AddrStd(ton_block::MsgAddrStd::with_address(
+        None,
+        workchain_id,
+        hash.into(),
     ))
 }
 

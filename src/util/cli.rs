@@ -171,14 +171,6 @@ pub fn print_output<T: std::fmt::Display>(arg: T) {
     .unwrap()
 }
 
-pub fn print_important_value(title: impl std::fmt::Display, value: impl std::fmt::Display) {
-    println!(
-        "{}\n{}",
-        console::style(format!("{title}:")).green().bold(),
-        console::style(value).bold()
-    );
-}
-
 pub fn print_error(text: impl std::fmt::Display) {
     println!("{}", console::style(format!("✘ {text}")).red().bold());
 }
@@ -198,9 +190,8 @@ impl Steps {
     }
 
     pub fn next(&mut self, text: impl std::fmt::Display) {
-        let newline = if self.current == 0 { "" } else { "\n" };
         println!(
-            "{newline}{} {text}",
+            "{} {text}",
             console::style(format!("[{}/{}]", self.current, self.total))
                 .bold()
                 .dim()
