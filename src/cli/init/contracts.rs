@@ -262,10 +262,10 @@ fn prepare_new_depool(
 
     // Configure min participants stake
     let min_stake: u64 = Input::with_theme(theme)
-        .with_prompt("Minimal participant stake (EVER)")
+        .with_prompt("Minimum participant stake (EVER)")
         .default(DEFAULT_MIN_STAKE)
         .validate_with(|value: &u64| match *value {
-            x if x < 10 => Err("Minimal stake is too small (< 10 EVER)"),
+            x if x < 10 => Err("Minimum stake is too small (< 10 EVER)"),
             _ => Ok(()),
         })
         .interact_text()?;

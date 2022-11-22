@@ -1,4 +1,3 @@
-use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -395,7 +394,7 @@ impl AppConfigValidatorSingle {
         );
 
         if let Some(stake) = ctx.elector_data.has_unfrozen_stake(wallet.address()) {
-            wait_for_wallet_balance(2 * ONE_EVER, &wallet).await?;
+            wallet.wait_for_balance(2 * ONE_EVER).await?;
 
             // Prevent shutdown during stake recovery
             let _guard = ctx.guard.lock().await;
@@ -416,7 +415,7 @@ impl AppConfigValidatorSingle {
 
         // Wait until validator wallet balance is enough
         let target_balance = self.stake_per_round as u128 + 2 * ONE_EVER;
-        wait_for_wallet_balance(target_balance, &wallet).await?;
+        wallet.wait_for_balance(target_balance).await?;
 
         // Prevent shutdown while electing
         let _guard = ctx.guard.lock().await;
@@ -495,6 +494,8 @@ impl AppConfigValidatorDePool {
         {
             tracing::info!("DePool was already deployed");
         } else {
+            tracing::info!("DePool was not deployed yet");
+
             // Load deployment params
             let deploy = self
                 .deploy
@@ -520,11 +521,9 @@ impl AppConfigValidatorDePool {
                 .and_then(|diff| (diff > 0).then_some(std::cmp::max(diff, ONE_EVER)));
 
             // Wait until there are enough funds on the validator wallet
-            wait_for_balance(
-                Wallet::INITIAL_BALANCE + depool_initial_balance.unwrap(),
-                || wallet.get_balance(),
-            )
-            .await?;
+            let target =
+                Wallet::INITIAL_BALANCE + depool_initial_balance.unwrap_or_default() + ONE_EVER;
+            wallet.wait_for_balance(target).await?;
 
             // Transfer initial funds to the depool (if its balance is not enough)
             if let Some(balance) = depool_initial_balance {
@@ -593,10 +592,9 @@ impl AppConfigValidatorDePool {
                     let deployment_message = factory.deploy_strategy(depool.address())?;
 
                     // Wait until there are enough funds on the validator wallet
-                    wait_for_balance(deployment_message.amount + ONE_EVER, || {
-                        wallet.get_balance()
-                    })
-                    .await?;
+                    wallet
+                        .wait_for_balance(deployment_message.amount + ONE_EVER)
+                        .await?;
 
                     // Prevent shutdown during the operation
                     let _guard = ctx.guard.lock();
@@ -697,7 +695,7 @@ impl AppConfigValidatorDePool {
         }
 
         // Wait until validator wallet balance is enough
-        wait_for_wallet_balance(2 * ONE_EVER, &wallet).await?;
+        wallet.wait_for_balance(2 * ONE_EVER).await?;
 
         // Prevent shutdown while electing
         let _guard = ctx.guard.lock().await;
@@ -781,7 +779,9 @@ impl AppConfigValidatorDePool {
             {
                 if remaining_stake > 0 {
                     remaining_stake = std::cmp::max(remaining_stake, depool_info.min_stake);
-                    wait_for_wallet_balance(remaining_stake as u128 + ONE_EVER, wallet).await?;
+                    wallet
+                        .wait_for_balance(remaining_stake as u128 + ONE_EVER)
+                        .await?;
 
                     // Prevent shutdown during sending stake
                     let _guard = ctx.guard.lock().await;
@@ -810,7 +810,7 @@ impl AppConfigValidatorDePool {
             }
 
             // Update rounds
-            wait_for_wallet_balance(2 * ONE_EVER, wallet).await?;
+            wallet.wait_for_balance(2 * ONE_EVER).await?;
 
             tracing::info!("sending ticktock");
             wallet
@@ -896,33 +896,32 @@ impl Timeline {
     }
 }
 
-async fn wait_for_wallet_balance(target_balance: u128, wallet: &Wallet) -> Result<()> {
-    let current_balance = wallet.get_balance().await?.unwrap_or_default();
-    if current_balance < target_balance {
-        tracing::info!(
-            current_balance = %Ever(current_balance),
-            target_balance = %Ever(target_balance),
-            "waiting for the wallet balance"
-        );
-        let balance = wait_for_balance(target_balance, || wallet.get_balance())
-            .await
-            .context("failed to fetch validator balance")?;
-        tracing::info!(balance = %Ever(balance), "fetched wallet balance");
-    }
-    Ok(())
-}
-
-async fn wait_for_balance<F>(target: u128, mut f: impl FnMut() -> F) -> Result<u128>
-where
-    F: Future<Output = Result<Option<u128>>>,
-{
-    let interval = std::time::Duration::from_secs(1);
-    loop {
-        match f().await?.unwrap_or_default() {
-            balance if balance >= target => break Ok(balance),
-            balance => tracing::debug!(balance, target, "account balance not enough"),
+impl Wallet {
+    async fn wait_for_balance(&self, target: u128) -> Result<u128> {
+        let interval = std::time::Duration::from_secs(1);
+        let mut last_balance = None;
+        loop {
+            match self.get_balance().await?.unwrap_or_default() {
+                balance if balance >= target => {
+                    if last_balance.is_some() {
+                        tracing::info!(balance = %Ever(balance), "fetched wallet balance");
+                    }
+                    break Ok(balance);
+                }
+                balance => {
+                    if !matches!(last_balance, Some(last_balance) if last_balance == balance) {
+                        tracing::info!(
+                            address = %self.address(),
+                            current_balance = %Ever(balance),
+                            target_balance = %Ever(target),
+                            "waiting until validator wallet balance is enough",
+                        );
+                    }
+                    last_balance = Some(balance);
+                }
+            }
+            tokio::time::sleep(interval).await;
         }
-        tokio::time::sleep(interval).await;
     }
 }
 
