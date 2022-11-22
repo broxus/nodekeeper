@@ -1,4 +1,3 @@
-use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,11 +9,9 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use super::{CliContext, ProjectDirs};
-use crate::config::{
-    AppConfigValidation, AppConfigValidationDePool, AppConfigValidationSingle, StoredKeys,
-};
-use crate::contracts::{depool, elector, wallet, InternalMessage, ONE_EVER};
-use crate::node_tcp_rpc::{ConfigWithId, NodeStats, NodeTcpRpc, RunningStats};
+use crate::config::*;
+use crate::contracts::*;
+use crate::node_tcp_rpc::{ConfigWithId, NodeStats, NodeTcpRpc};
 use crate::node_udp_rpc::NodeUdpRpc;
 use crate::subscription::Subscription;
 use crate::util::Ever;
@@ -50,6 +47,10 @@ pub struct Cmd {
     /// interval increase factor. 2.0 times default
     #[argh(option, default = "2.0")]
     retry_interval_multiplier: f64,
+
+    /// ignore contracts deployment
+    #[argh(switch)]
+    ignore_deploy: bool,
 }
 
 impl Cmd {
@@ -64,7 +65,9 @@ impl Cmd {
             stake_unfreeze_offset: self.stake_unfreeze_offset,
             elections_start_offset: self.elections_start_offset,
             elections_end_offset: self.elections_end_offset,
-            validation_mutex: Arc::new(Mutex::new(())),
+            ignore_deploy: self.ignore_deploy,
+            last_params: Default::default(),
+            guard: Arc::new(Mutex::new(())),
         };
 
         // Spawn cancellation future
@@ -72,13 +75,13 @@ impl Cmd {
         let cancelled = cancellation_token.cancelled();
 
         tokio::spawn({
-            let validation_mutex = manager.validation_mutex.clone();
+            let guard = manager.guard.clone();
             let cancellation_token = cancellation_token.clone();
 
             async move {
                 if let Ok(signal) = signal_rx.await {
                     tracing::warn!(?signal, "received termination signal");
-                    let _guard = validation_mutex.lock().await;
+                    let _guard = guard.lock().await;
                     cancellation_token.cancel();
                 }
             }
@@ -123,11 +126,15 @@ struct ValidationManager {
     stake_unfreeze_offset: u32,
     elections_start_offset: u32,
     elections_end_offset: u32,
-    validation_mutex: Arc<Mutex<()>>,
+    ignore_deploy: bool,
+    last_params: parking_lot::Mutex<Option<AppConfigValidator>>,
+    guard: Arc<Mutex<()>>,
 }
 
 impl ValidationManager {
     async fn try_validate(&mut self) -> Result<()> {
+        const SYNC_CHECK_INTERVAL: u32 = 10;
+
         tracing::info!("started validation loop");
 
         let dirs = self.ctx.dirs();
@@ -142,18 +149,36 @@ impl ValidationManager {
 
             // Read config
             let mut config = self.ctx.load_config()?;
-            let validation = config.take_validation()?;
+            let validator = match config.validator.take() {
+                Some(validator) => validator,
+                None => {
+                    interval = SYNC_CHECK_INTERVAL;
+                    continue;
+                }
+            };
 
             // Create tcp rpc and wait until node is synced
             let node_tcp_rpc = NodeTcpRpc::new(config.control()?).await?;
-            self.wait_until_synced(&node_tcp_rpc, validation.is_single())
-                .await?;
+            if !self.is_synced(&node_tcp_rpc, validator.is_single()).await? {
+                interval = SYNC_CHECK_INTERVAL;
+                continue;
+            }
+            let node_udp_rpc = NodeUdpRpc::new(config.adnl()?).await?;
+
+            // Create subscription
+            let subscription = Subscription::new(node_tcp_rpc, node_udp_rpc);
+            subscription.ensure_ready().await?;
 
             // Get current network config params
             let ConfigWithId {
                 block_id: target_block,
                 config: blockchain_config,
-            } = node_tcp_rpc.get_config_all().await?;
+            } = subscription.tcp_rpc().get_config_all().await?;
+
+            if !self.ignore_deploy && self.ensure_deployed(&validator, &subscription).await? {
+                // Proceed to the next iteration after contracts deployment
+                continue;
+            }
 
             let elector_address = blockchain_config
                 .elector_address()
@@ -164,11 +189,6 @@ impl ValidationManager {
             let current_vset = blockchain_config
                 .validator_set()
                 .context("invalid validator set")?;
-
-            // Create subscription
-            let node_udp_rpc = NodeUdpRpc::new(config.adnl()?).await?;
-            let subscription = Subscription::new(node_tcp_rpc, node_udp_rpc);
-            subscription.ensure_ready().await?;
 
             // Get block with the config
             tracing::info!("target block id: {target_block}");
@@ -261,13 +281,13 @@ impl ValidationManager {
                 elector_data,
                 election_id,
                 timings,
-                guard: self.validation_mutex.clone(),
+                guard: &self.guard,
             };
 
             // Prepare election future
-            let validation = match validation {
-                AppConfigValidation::Single(validation) => validation.elect(keypair, ctx).boxed(),
-                AppConfigValidation::DePool(validation) => validation.elect(keypair, ctx).boxed(),
+            let validation = match validator {
+                AppConfigValidator::Single(validation) => validation.elect(keypair, ctx).boxed(),
+                AppConfigValidator::DePool(validation) => validation.elect(keypair, ctx).boxed(),
             };
 
             // Try elect
@@ -286,41 +306,79 @@ impl ValidationManager {
         }
     }
 
-    async fn wait_until_synced(
+    async fn ensure_deployed(
         &self,
-        node_rpc: &NodeTcpRpc,
-        only_mc: bool,
-    ) -> Result<RunningStats> {
+        validator: &AppConfigValidator,
+        subscription: &Arc<Subscription>,
+    ) -> Result<bool> {
+        if matches!(&*self.last_params.lock(), Some(last_params) if last_params == validator) {
+            return Ok(false);
+        }
+
+        let ctx = DeploymentContext {
+            subscription,
+            dirs: self.ctx.dirs(),
+            guard: &self.guard,
+        };
+
+        match validator {
+            AppConfigValidator::Single(validator) => validator.deploy(ctx).await?,
+            AppConfigValidator::DePool(validator) => validator.deploy(ctx).await?,
+        }
+        *self.last_params.lock() = Some(validator.clone());
+        Ok(true)
+    }
+
+    async fn is_synced(&self, node_rpc: &NodeTcpRpc, only_mc: bool) -> Result<bool> {
         let interval = Duration::from_secs(10);
+        let mut attempts = 6;
         loop {
             match node_rpc.get_stats().await? {
                 NodeStats::Running(stats) => {
                     if stats.mc_time_diff < self.max_time_diff
                         && (only_mc || stats.sc_time_diff < self.max_time_diff)
                     {
-                        break Ok(stats);
+                        break Ok(true);
                     }
                 }
                 NodeStats::NotReady => {
                     tracing::trace!("node not synced");
                 }
             }
-            tokio::time::sleep(interval).await;
+
+            attempts -= 1;
+            if attempts > 0 {
+                tokio::time::sleep(interval).await;
+            } else {
+                break Ok(false);
+            }
         }
     }
 }
 
-struct ElectionsContext {
+#[derive(Clone, Copy)]
+struct DeploymentContext<'a> {
+    subscription: &'a Arc<Subscription>,
+    dirs: &'a ProjectDirs,
+    guard: &'a Mutex<()>,
+}
+
+struct ElectionsContext<'a> {
     subscription: Arc<Subscription>,
     elector: elector::Elector,
     elector_data: elector::ElectorData,
     election_id: u32,
     timings: ton_block::ConfigParam15,
-    guard: Arc<Mutex<()>>,
+    guard: &'a Mutex<()>,
 }
 
-impl AppConfigValidationSingle {
-    async fn elect(self, keypair: ed25519_dalek::Keypair, ctx: ElectionsContext) -> Result<()> {
+impl AppConfigValidatorSingle {
+    async fn deploy(&self, _: DeploymentContext<'_>) -> Result<()> {
+        // TODO: deploy validator wallet if it differs from ever wallet
+        Ok(())
+    }
+
+    async fn elect(self, keypair: ed25519_dalek::Keypair, ctx: ElectionsContext<'_>) -> Result<()> {
         tracing::info!(
             election_id = ctx.election_id,
             address = %self.address,
@@ -329,14 +387,14 @@ impl AppConfigValidationSingle {
             "election as single"
         );
 
-        let wallet = wallet::Wallet::new(-1, keypair, ctx.subscription)?;
+        let wallet = Wallet::new(-1, keypair, ctx.subscription);
         anyhow::ensure!(
             wallet.address() == &self.address,
             "validator wallet address mismatch"
         );
 
         if let Some(stake) = ctx.elector_data.has_unfrozen_stake(wallet.address()) {
-            wait_for_wallet_balance(2 * ONE_EVER, &wallet).await?;
+            wallet.wait_for_balance(2 * ONE_EVER).await?;
 
             // Prevent shutdown during stake recovery
             let _guard = ctx.guard.lock().await;
@@ -357,7 +415,7 @@ impl AppConfigValidationSingle {
 
         // Wait until validator wallet balance is enough
         let target_balance = self.stake_per_round as u128 + 2 * ONE_EVER;
-        wait_for_wallet_balance(target_balance, &wallet).await?;
+        wallet.wait_for_balance(target_balance).await?;
 
         // Prevent shutdown while electing
         let _guard = ctx.guard.lock().await;
@@ -391,8 +449,193 @@ impl AppConfigValidationSingle {
     }
 }
 
-impl AppConfigValidationDePool {
-    async fn elect(self, keypair: ed25519_dalek::Keypair, ctx: ElectionsContext) -> Result<()> {
+impl AppConfigValidatorDePool {
+    async fn deploy(&self, ctx: DeploymentContext<'_>) -> Result<()> {
+        struct LazyWallet<'a> {
+            state: Option<Wallet>,
+            target: &'a ton_block::MsgAddressInt,
+            ctx: DeploymentContext<'a>,
+        }
+
+        impl LazyWallet<'_> {
+            fn get_or_init(&'_ mut self) -> Result<&'_ Wallet> {
+                match &mut self.state {
+                    Some(wallet) => Ok(wallet),
+                    state @ None => {
+                        let keypair = self.ctx.dirs.load_validator_keys()?;
+                        let res = Wallet::new(0, keypair, self.ctx.subscription.clone());
+                        anyhow::ensure!(
+                            res.address() == self.target,
+                            "validator wallet address mismatch"
+                        );
+                        Ok(state.get_or_insert(res))
+                    }
+                }
+            }
+        }
+
+        let mut wallet = LazyWallet {
+            state: None,
+            target: &self.owner,
+            ctx,
+        };
+
+        let mut depool = DePool::new(
+            self.depool_type,
+            self.depool.clone(),
+            ctx.subscription.clone(),
+        );
+
+        // Ensure that depool is deployed
+        if depool
+            .is_deployed()
+            .await
+            .context("failed to check DePool")?
+        {
+            tracing::info!("DePool was already deployed");
+        } else {
+            tracing::info!("DePool was not deployed yet");
+
+            // Load deployment params
+            let deploy = self
+                .deploy
+                .as_ref()
+                .context("deployment params not found")?;
+
+            // Load and check depool keypair
+            depool.set_keypair(ctx.dirs.load_depool_keys()?)?;
+
+            // Prepare wallet
+            let wallet = wallet.get_or_init()?;
+
+            // Get current depool balance
+            let depool_balance = depool
+                .get_balance()
+                .await
+                .context("failed to get DePool balance")?
+                .unwrap_or_default();
+
+            // Compute remaining depool balance
+            let depool_initial_balance = DePool::INITIAL_BALANCE
+                .checked_sub(depool_balance)
+                .and_then(|diff| (diff > 0).then_some(std::cmp::max(diff, ONE_EVER)));
+
+            // Wait until there are enough funds on the validator wallet
+            let target =
+                Wallet::INITIAL_BALANCE + depool_initial_balance.unwrap_or_default() + ONE_EVER;
+            wallet.wait_for_balance(target).await?;
+
+            // Transfer initial funds to the depool (if its balance is not enough)
+            if let Some(balance) = depool_initial_balance {
+                // Prevent shutdown during the operation
+                let _guard = ctx.guard.lock();
+
+                tracing::info!("transferring initial funds to the DePool");
+                wallet
+                    .call(InternalMessage::empty(depool.address().clone(), balance))
+                    .await
+                    .context("failed to transfer funds to the DePool contract")?;
+            }
+
+            // Prevent shutdown during the operation
+            let _guard = ctx.guard.lock();
+
+            // Call depool constructor
+            tracing::info!("deploying DePool contract");
+            depool
+                .deploy(depool::DePoolInitParams {
+                    min_stake: deploy.min_stake,
+                    validator_assurance: deploy.validator_assurance,
+                    owner: wallet.address().clone(),
+                    participant_reward_fraction: deploy.participant_reward_fraction,
+                })
+                .await
+                .context("failed to deploy DePool")?;
+            tracing::info!("successfully deployed DePool");
+        }
+
+        // Handle stEVER depool case
+        if let DePoolType::StEver = self.depool_type {
+            let depool_state = depool.get_state().await?;
+
+            // Get allowed participants
+            let allowed_participants = depool
+                .get_allowed_participants(&depool_state)
+                .context("failed to get allowed participant")?;
+
+            // Strategy was not configured yet
+            if allowed_participants.len() < 2 {
+                let wallet = wallet.get_or_init()?;
+
+                let subscription = ctx.subscription.clone();
+                let strategy = if let Some(address) = self.strategy.clone() {
+                    let strategy = strategy::Strategy::new(address, subscription);
+                    let details = strategy
+                        .get_details()
+                        .await
+                        .context("failed to get stEVER strategy details")?;
+
+                    anyhow::ensure!(
+                        &details.depool == depool.address(),
+                        "strategy was deployed for the different DePool"
+                    );
+
+                    Some(strategy.address)
+                } else if let Some(address) = self.strategy_factory.clone() {
+                    let factory = strategy_factory::StrategyFactory::new(address, subscription);
+                    factory
+                        .get_details()
+                        .await
+                        .context("failed to get stEVER strategy factory details")?;
+
+                    // Prepare deployment message
+                    let deployment_message = factory.deploy_strategy(depool.address())?;
+
+                    // Wait until there are enough funds on the validator wallet
+                    wallet
+                        .wait_for_balance(deployment_message.amount + ONE_EVER)
+                        .await?;
+
+                    // Prevent shutdown during the operation
+                    let _guard = ctx.guard.lock();
+
+                    // Send an internal message to the factory
+                    tracing::info!("deploying stEVER strategy");
+                    let strategy = wallet
+                        .call(deployment_message)
+                        .await
+                        .and_then(strategy_factory::StrategyFactory::extract_strategy_address)
+                        .context("failed to deploy stEVER DePool strategy")?;
+                    tracing::info!(%strategy, "successfully deployed stEVER strategy");
+
+                    Some(strategy)
+                } else {
+                    tracing::warn!(
+                        "neither a strategy factory nor an explicit strategy was specified"
+                    );
+                    None
+                };
+
+                if let Some(strategy) = strategy {
+                    // Prevent shutdown during the operation
+                    let _guard = ctx.guard.lock();
+
+                    // Set strategy as an allowed participant
+                    tracing::info!(%strategy, "setting DePool strategy");
+                    wallet
+                        .call(depool.set_allowed_participant(&strategy)?)
+                        .await
+                        .context("failed to set update DePool strategy")?;
+                    tracing::info!(%strategy, "DePool strategy successfully updated");
+                }
+            }
+        }
+
+        // Done
+        Ok(())
+    }
+
+    async fn elect(self, keypair: ed25519_dalek::Keypair, ctx: ElectionsContext<'_>) -> Result<()> {
         tracing::info!(
             election_id = ctx.election_id,
             depool = %self.depool,
@@ -402,13 +645,13 @@ impl AppConfigValidationDePool {
             "election as DePool"
         );
 
-        let wallet = wallet::Wallet::new(0, keypair, ctx.subscription.clone())?;
+        let wallet = Wallet::new(0, keypair, ctx.subscription.clone());
         anyhow::ensure!(
             wallet.address() == &self.owner,
             "validator wallet address mismatch"
         );
 
-        let depool = depool::DePool::new(
+        let depool = DePool::new(
             self.depool_type,
             self.depool.clone(),
             ctx.subscription.clone(),
@@ -452,7 +695,7 @@ impl AppConfigValidationDePool {
         }
 
         // Wait until validator wallet balance is enough
-        wait_for_wallet_balance(2 * ONE_EVER, &wallet).await?;
+        wallet.wait_for_balance(2 * ONE_EVER).await?;
 
         // Prevent shutdown while electing
         let _guard = ctx.guard.lock().await;
@@ -487,11 +730,11 @@ impl AppConfigValidationDePool {
 
     async fn update_depool(
         &self,
-        wallet: &wallet::Wallet,
-        depool: &depool::DePool,
+        wallet: &Wallet,
+        depool: &DePool,
         depool_info: &depool::DePoolInfo,
         mut depool_state: ton_block::AccountStuff,
-        ctx: &ElectionsContext,
+        ctx: &ElectionsContext<'_>,
     ) -> Result<Option<(u64, depool::RoundStep)>> {
         const TICKTOCK_INTERVAL: Duration = Duration::from_secs(60);
 
@@ -536,7 +779,9 @@ impl AppConfigValidationDePool {
             {
                 if remaining_stake > 0 {
                     remaining_stake = std::cmp::max(remaining_stake, depool_info.min_stake);
-                    wait_for_wallet_balance(remaining_stake as u128 + ONE_EVER, wallet).await?;
+                    wallet
+                        .wait_for_balance(remaining_stake as u128 + ONE_EVER)
+                        .await?;
 
                     // Prevent shutdown during sending stake
                     let _guard = ctx.guard.lock().await;
@@ -565,7 +810,7 @@ impl AppConfigValidationDePool {
             }
 
             // Update rounds
-            wait_for_wallet_balance(2 * ONE_EVER, wallet).await?;
+            wallet.wait_for_balance(2 * ONE_EVER).await?;
 
             tracing::info!("sending ticktock");
             wallet
@@ -651,33 +896,32 @@ impl Timeline {
     }
 }
 
-async fn wait_for_wallet_balance(target_balance: u128, wallet: &wallet::Wallet) -> Result<()> {
-    let current_balance = wallet.get_balance().await?.unwrap_or_default();
-    if current_balance < target_balance {
-        tracing::info!(
-            current_balance = %Ever(current_balance),
-            target_balance = %Ever(target_balance),
-            "waiting for the wallet balance"
-        );
-        let balance = wait_for_balance(target_balance, || wallet.get_balance())
-            .await
-            .context("failed to fetch validator balance")?;
-        tracing::info!(balance = %Ever(balance), "fetched wallet balance");
-    }
-    Ok(())
-}
-
-async fn wait_for_balance<F>(target: u128, mut f: impl FnMut() -> F) -> Result<u128>
-where
-    F: Future<Output = Result<Option<u128>>>,
-{
-    let interval = std::time::Duration::from_secs(1);
-    loop {
-        match f().await?.unwrap_or_default() {
-            balance if balance >= target => break Ok(balance),
-            balance => tracing::debug!(balance, target, "account balance not enough"),
+impl Wallet {
+    async fn wait_for_balance(&self, target: u128) -> Result<u128> {
+        let interval = std::time::Duration::from_secs(1);
+        let mut last_balance = None;
+        loop {
+            match self.get_balance().await?.unwrap_or_default() {
+                balance if balance >= target => {
+                    if last_balance.is_some() {
+                        tracing::info!(balance = %Ever(balance), "fetched wallet balance");
+                    }
+                    break Ok(balance);
+                }
+                balance => {
+                    if !matches!(last_balance, Some(last_balance) if last_balance == balance) {
+                        tracing::info!(
+                            address = %self.address(),
+                            current_balance = %Ever(balance),
+                            target_balance = %Ever(target),
+                            "waiting until validator wallet balance is enough",
+                        );
+                    }
+                    last_balance = Some(balance);
+                }
+            }
+            tokio::time::sleep(interval).await;
         }
-        tokio::time::sleep(interval).await;
     }
 }
 
@@ -685,6 +929,11 @@ impl ProjectDirs {
     fn load_validator_keys(&self) -> Result<ed25519_dalek::Keypair> {
         let keys = StoredKeys::load(&self.validator_keys)
             .context("failed to load validator wallet keys")?;
+        Ok(keys.as_keypair())
+    }
+
+    fn load_depool_keys(&self) -> Result<ed25519_dalek::Keypair> {
+        let keys = StoredKeys::load(&self.depool_keys).context("failed to load DePool keys")?;
         Ok(keys.as_keypair())
     }
 }

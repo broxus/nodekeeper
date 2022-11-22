@@ -16,6 +16,7 @@ macro_rules! selector_variant {
         }
 
         impl $ty {
+            #[allow(unused)]
             fn all() -> Vec<Self> {
                 vec![$(Self::$name),*]
             }

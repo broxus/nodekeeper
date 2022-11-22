@@ -76,10 +76,6 @@ impl Subscription {
         &self.node_udp_rpc
     }
 
-    pub async fn get_blockchain_config(&self) -> Result<ton_block::ConfigParams> {
-        Ok(self.node_tcp_rpc.get_config_all().await?.config)
-    }
-
     pub async fn get_account_state(
         &self,
         address: &ton_block::MsgAddressInt,
