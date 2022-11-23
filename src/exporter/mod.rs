@@ -5,7 +5,7 @@ use pomfrit::formatter::DisplayPrometheusExt;
 
 pub use self::file_target::FileExporterTarget;
 pub use self::http_target::HttpExporterTarget;
-use crate::node_tcp_rpc::{NodeStats, NodeTcpRpc, ValidatorSetEntry};
+use crate::network::{NodeStats, NodeTcpRpc, ValidatorSetEntry};
 
 mod file_target;
 mod http_target;

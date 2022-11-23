@@ -6,7 +6,7 @@ use ton_abi::contract::ABI_VERSION_2_3;
 use ton_block::{Deserializable, GetRepresentationHash};
 
 use super::{InternalMessage, ONE_EVER};
-use crate::subscription::Subscription;
+use crate::network::Subscription;
 use crate::util::{make_default_headers, TransactionWithHash};
 
 pub struct Wallet {

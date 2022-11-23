@@ -236,13 +236,13 @@ const BLOCK_TIMEOUTS: DownloaderTimeouts = DownloaderTimeouts {
 };
 
 #[derive(Debug, Copy, Clone)]
-pub struct DownloaderTimeouts {
+struct DownloaderTimeouts {
     /// Milliseconds
-    pub initial: u64,
+    initial: u64,
     /// Milliseconds
-    pub max: u64,
+    max: u64,
 
-    pub multiplier: f64,
+    multiplier: f64,
 }
 
 impl DownloaderTimeouts {

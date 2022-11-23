@@ -37,9 +37,7 @@ mod config;
 mod contracts;
 mod crypto;
 mod exporter;
-mod node_tcp_rpc;
-mod node_udp_rpc;
-mod subscription;
+mod network;
 mod util;
 
 #[tokio::main]

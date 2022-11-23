@@ -11,9 +11,7 @@ use tokio_util::sync::CancellationToken;
 use super::{CliContext, ProjectDirs};
 use crate::config::*;
 use crate::contracts::*;
-use crate::node_tcp_rpc::{ConfigWithId, NodeStats, NodeTcpRpc};
-use crate::node_udp_rpc::NodeUdpRpc;
-use crate::subscription::Subscription;
+use crate::network::{ConfigWithId, NodeStats, NodeTcpRpc, NodeUdpRpc, Subscription};
 use crate::util::Ever;
 
 #[derive(FromArgs)]

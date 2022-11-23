@@ -7,9 +7,7 @@ use ton_block::{Deserializable, Serializable};
 
 use super::CliContext;
 use crate::config::{AppConfig, StoredKeys};
-use crate::node_tcp_rpc::NodeTcpRpc;
-use crate::node_udp_rpc::NodeUdpRpc;
-use crate::subscription::Subscription;
+use crate::network::{NodeTcpRpc, NodeUdpRpc, Subscription};
 use crate::util::*;
 
 #[derive(FromArgs)]

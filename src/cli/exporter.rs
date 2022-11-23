@@ -7,7 +7,7 @@ use argh::FromArgs;
 
 use super::CliContext;
 use crate::exporter::{Exporter, ExporterTarget, FileExporterTarget, HttpExporterTarget, Metrics};
-use crate::node_tcp_rpc::NodeTcpRpc;
+use crate::network::NodeTcpRpc;
 
 #[derive(FromArgs)]
 /// Prometheus metrics exporter

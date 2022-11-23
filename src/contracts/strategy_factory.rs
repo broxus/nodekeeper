@@ -7,7 +7,7 @@ use nekoton_abi::{
 };
 
 use super::{InternalMessage, ONE_EVER};
-use crate::subscription::Subscription;
+use crate::network::Subscription;
 use crate::util::TransactionWithHash;
 
 pub struct StrategyFactory {

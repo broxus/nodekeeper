@@ -11,8 +11,8 @@ use tokio::sync::{mpsc, oneshot, Notify};
 use tokio_util::sync::{CancellationToken, DropGuard};
 use ton_block::{Deserializable, Serializable};
 
-use crate::node_tcp_rpc::NodeTcpRpc;
-use crate::node_udp_rpc::NodeUdpRpc;
+use super::node_tcp_rpc::NodeTcpRpc;
+use super::node_udp_rpc::NodeUdpRpc;
 use crate::util::{split_address, BlockStuff, FxDashMap, TransactionWithHash};
 
 pub struct Subscription {

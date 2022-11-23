@@ -12,7 +12,7 @@ use ton_block::{Deserializable, Serializable};
 
 use super::{InternalMessage, ONE_EVER};
 use crate::config::DePoolType;
-use crate::subscription::Subscription;
+use crate::network::Subscription;
 use crate::util::make_default_headers;
 
 #[derive(Debug, Clone)]

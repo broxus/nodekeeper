@@ -4,7 +4,7 @@ use serde::Serialize;
 use ton_block::Serializable;
 
 use super::CliContext;
-use crate::node_tcp_rpc::{ConfigParamWithId, ConfigWithId, NodeTcpRpc};
+use crate::network::{ConfigParamWithId, ConfigWithId, NodeTcpRpc};
 use crate::util::*;
 
 #[derive(FromArgs)]

@@ -5,7 +5,7 @@ use nekoton_abi::{
     BuildTokenValue, FunctionBuilder, KnownParamType, TokenValueExt, UnpackAbi, UnpackFirst,
 };
 
-use crate::subscription::Subscription;
+use crate::network::Subscription;
 
 pub struct Strategy {
     pub address: ton_block::MsgAddressInt,
