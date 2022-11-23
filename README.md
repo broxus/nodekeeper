@@ -14,12 +14,23 @@ cargo install --locked --git https://github.com/broxus/stever-node-tools
 
 ```bash
 # Configure node
-stever init node
+stever init
 
 # Optionally (if user isn't root) configure systemd services
 sudo stever init systemd
+```
 
-# Deploy contracts (as single or DePool)
+> NOTE: Make sure you back up your keys after initial configuration!
+>
+> All keys are stored at `$HOME/.stever/keys/`
+
+You can also configure different steps separately:
+
+```bash
+# Initialize only node configs
+stever init node
+
+# Initialize only contracts
 stever init contracts
 ```
 

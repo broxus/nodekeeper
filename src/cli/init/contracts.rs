@@ -28,7 +28,7 @@ const DEFAULT_STRATEGY_FACTORY: &str =
 pub struct Cmd {}
 
 impl Cmd {
-    pub async fn run(self, theme: &dyn Theme, ctx: CliContext) -> Result<()> {
+    pub async fn run(self, theme: &dyn Theme, ctx: &CliContext) -> Result<()> {
         let mut config = ctx.load_config()?;
         let dirs = ctx.dirs();
 
@@ -125,7 +125,7 @@ fn prepare_single_validator(
     let target_balance = stake_per_round as u128 * 2 + Wallet::INITIAL_BALANCE;
 
     println!(
-        "\n{}\n{}\n\n{} {}{}",
+        "\n{}\n{}\n\n{} {}{}\n\n{}\n{}",
         console::style("Validator wallet address:").green().bold(),
         console::style(wallet_address).bold(),
         console::style("Required validator wallet balance:")
@@ -138,7 +138,11 @@ fn prepare_single_validator(
             Ever(Wallet::INITIAL_BALANCE),
             Ever(target_balance)
         ))
-        .dim()
+        .dim(),
+        console::style("Make sure you back up your keys:")
+            .yellow()
+            .bold(),
+        console::style(dirs.validator_keys.display()).bold()
     );
 
     Ok(())
@@ -206,6 +210,15 @@ fn prepare_depool_validator(
             .dim()
         );
     }
+
+    println!(
+        "\n{}\n{}\n{}",
+        console::style("Make sure you back up your keys:")
+            .yellow()
+            .bold(),
+        console::style(dirs.validator_keys.display()).bold(),
+        console::style(dirs.depool_keys.display()).bold(),
+    );
 
     Ok(())
 }

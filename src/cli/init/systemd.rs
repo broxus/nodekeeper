@@ -18,7 +18,7 @@ use crate::util::*;
 pub struct Cmd {}
 
 impl Cmd {
-    pub async fn run(self, theme: &dyn Theme, ctx: CliContext) -> Result<()> {
+    pub async fn run(self, theme: &dyn Theme, ctx: &CliContext) -> Result<()> {
         let dirs = ctx.dirs();
         let mut steps = Steps::new(2);
 

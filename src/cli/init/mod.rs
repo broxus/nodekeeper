@@ -14,16 +14,21 @@ mod systemd;
 #[argh(subcommand, name = "init")]
 pub struct Cmd {
     #[argh(subcommand)]
-    subcommand: SubCmd,
+    subcommand: Option<SubCmd>,
 }
 
 impl Cmd {
     pub async fn run(self, ctx: CliContext) -> Result<()> {
         let theme = &dialoguer::theme::ColorfulTheme::default();
         match self.subcommand {
-            SubCmd::Node(cmd) => cmd.run(theme, ctx).await,
-            SubCmd::Systemd(cmd) => cmd.run(theme, ctx).await,
-            SubCmd::Contracts(cmd) => cmd.run(theme, ctx).await,
+            None => {
+                node::Cmd {}.run(theme, &ctx).await?;
+                println!();
+                contracts::Cmd {}.run(theme, &ctx).await
+            }
+            Some(SubCmd::Node(cmd)) => cmd.run(theme, &ctx).await,
+            Some(SubCmd::Systemd(cmd)) => cmd.run(theme, &ctx).await,
+            Some(SubCmd::Contracts(cmd)) => cmd.run(theme, &ctx).await,
         }
     }
 }

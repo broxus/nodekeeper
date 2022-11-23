@@ -27,7 +27,7 @@ const DEFAULT_NODE_DB_PATH: &str = "/var/ever/rnode";
 pub struct Cmd {}
 
 impl Cmd {
-    pub async fn run(self, theme: &dyn Theme, ctx: CliContext) -> Result<()> {
+    pub async fn run(self, theme: &dyn Theme, ctx: &CliContext) -> Result<()> {
         let dirs = ctx.dirs();
 
         // Compute steps len
@@ -86,11 +86,11 @@ impl Cmd {
             systemd_daemon_reload().await?;
 
             // Optionally start services
-            steps.next("Validator node is configured now. Great!");
+            steps.next("Node is configured now. Great!");
             start_services(theme).await?;
         } else {
             // Ask user about creating systemd services
-            steps.next("Validator node is configured now. Great!");
+            steps.next("Node is configured now. Great!");
             check_systemd_service(dirs)?;
         }
 
