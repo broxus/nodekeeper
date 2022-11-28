@@ -13,6 +13,12 @@ cargo install --locked --git https://github.com/broxus/stever-node-tools
 ### Validation
 
 ```bash
+# Optionally configure root directory:
+# export STEVER_ROOT=/var/stever
+#
+# Or explicitly specify it as a param, e.g.:
+# stever --root /var/stever init
+
 # Configure node
 stever init
 
