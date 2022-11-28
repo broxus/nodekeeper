@@ -5,6 +5,8 @@ All-in-one node management tool with stEVER depool support
 ## How to install
 
 ```bash
+sudo apt install pkg-config libssl-dev
+
 cargo install --locked --git https://github.com/broxus/stever-node-tools
 ```
 
