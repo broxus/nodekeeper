@@ -5,8 +5,13 @@ All-in-one node management tool with stEVER depool support
 ## How to install
 
 ```bash
+# Install deps for this app
 sudo apt install pkg-config libssl-dev
 
+# Install deps for the node
+sudo apt install libzstd-dev libclang-dev libtcmalloc-minimal4 libprotobuf-dev libgoogle-perftools-dev
+
+# Install the app
 cargo install --locked --git https://github.com/broxus/stever-node-tools
 ```
 
