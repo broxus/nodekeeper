@@ -290,6 +290,7 @@ fn prepare_new_depool(
         .default(DEFAULT_VALIDATOR_ASSURANCE)
         .validate_with(|value: &u64| match *value {
             x if x < 10 => Err("Too small validator assurance (< 10 EVER)"),
+            x if x < min_stake => Err("Validator assurance is less than minimum stake"),
             _ => Ok(()),
         })
         .interact_text()?;
