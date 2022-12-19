@@ -86,7 +86,7 @@ fn prepare_single_validator(
     }
     .interact()?;
 
-    let wallet_address = wallet::compute_wallet_address(-1, &keypair.public);
+    let wallet_address = wallet::Signer::compute_simple_address(-1, &keypair.public);
 
     // Configure stake params
     steps.next("Configuring the stake");
@@ -116,6 +116,7 @@ fn prepare_single_validator(
         address: wallet_address.clone(),
         stake_per_round,
         stake_factor: Some(stake_factor),
+        signer: Default::default(),
     }));
     dirs.store_app_config(app_config)?;
 
@@ -242,7 +243,7 @@ fn prepare_new_depool(
 
     // TODO: Select wallet type
 
-    let wallet_address = wallet::compute_wallet_address(0, &wallet_keypair.public);
+    let wallet_address = wallet::Signer::compute_simple_address(0, &wallet_keypair.public);
 
     // Create depool
     steps.next("Creating DePool");
@@ -323,6 +324,7 @@ fn prepare_new_depool(
             validator_assurance,
             participant_reward_fraction,
         }),
+        signer: Default::default(),
     };
 
     // Configure stEVER strategies stuff
@@ -366,7 +368,7 @@ fn prepare_existing_depool(
 
     // TODO: Select wallet type
 
-    let wallet_address = wallet::compute_wallet_address(0, &wallet_keypair.public);
+    let wallet_address = wallet::Signer::compute_simple_address(0, &wallet_keypair.public);
 
     // Prepare validator wallet
     steps.next("Creating DePool");
@@ -402,6 +404,7 @@ fn prepare_existing_depool(
         strategy_factory: None,
         strategy: None,
         deploy: None,
+        signer: Default::default(),
     };
 
     // Configure stEVER strategies stuff
