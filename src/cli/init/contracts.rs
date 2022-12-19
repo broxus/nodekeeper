@@ -282,7 +282,6 @@ fn prepare_new_depool(
             _ => Ok(()),
         })
         .interact_text()?;
-    let min_stake = min_stake.saturating_mul(ONE_EVER as u64);
 
     // Configure validator assurance
     let validator_assurance: u64 = Input::with_theme(theme)
@@ -294,6 +293,8 @@ fn prepare_new_depool(
             _ => Ok(()),
         })
         .interact_text()?;
+
+    let min_stake = min_stake.saturating_mul(ONE_EVER as u64);
     let validator_assurance = validator_assurance.saturating_mul(ONE_EVER as u64);
 
     // Configure participant reward fraction
