@@ -15,6 +15,9 @@ mod systemd;
 pub struct Cmd {
     #[argh(subcommand)]
     subcommand: Option<SubCmd>,
+    /// force download and build the latest node
+    #[argh(option)]
+    rebuild: bool,
 }
 
 impl Cmd {
@@ -22,7 +25,11 @@ impl Cmd {
         let theme = &dialoguer::theme::ColorfulTheme::default();
         match self.subcommand {
             None => {
-                node::Cmd {}.run(theme, &ctx).await?;
+                node::Cmd {
+                    rebuild: self.rebuild,
+                }
+                .run(theme, &ctx)
+                .await?;
                 println!();
                 contracts::Cmd {}.run(theme, &ctx).await
             }

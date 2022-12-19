@@ -47,6 +47,13 @@ stever init node
 stever init contracts
 ```
 
+Updating the node:
+
+```bash
+stever init node --rebuild
+sudo systemctl restart ever-validator
+```
+
 ### Metrics exporter
 
 ```bash

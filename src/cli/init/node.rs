@@ -24,7 +24,11 @@ const DEFAULT_NODE_DB_PATH: &str = "/var/ever/rnode";
 #[derive(FromArgs)]
 /// Prepares configs and binaries
 #[argh(subcommand, name = "node")]
-pub struct Cmd {}
+pub struct Cmd {
+    /// force download and build the latest node
+    #[argh(option)]
+    pub rebuild: bool,
+}
 
 impl Cmd {
     pub async fn run(self, theme: &dyn Theme, ctx: &CliContext) -> Result<()> {
@@ -71,7 +75,7 @@ impl Cmd {
 
         // Clone and build the node
         steps.next("Preparing binary");
-        if !setup_binary(theme, dirs).await? {
+        if !setup_binary(theme, dirs, self.rebuild).await? {
             return Ok(());
         }
 
@@ -562,8 +566,8 @@ fn setup_node_config_paths(
     dirs.store_node_config(node_config)
 }
 
-async fn setup_binary(theme: &dyn Theme, dirs: &ProjectDirs) -> Result<bool> {
-    if dirs.node_binary.exists() {
+async fn setup_binary(theme: &dyn Theme, dirs: &ProjectDirs, force: bool) -> Result<bool> {
+    if !force && dirs.node_binary.exists() {
         // Do nothing if binary exists
         // TODO: print version and ask for update?
         return Ok(true);
