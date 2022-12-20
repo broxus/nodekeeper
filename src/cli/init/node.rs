@@ -26,7 +26,7 @@ const DEFAULT_NODE_DB_PATH: &str = "/var/ever/rnode";
 #[argh(subcommand, name = "node")]
 pub struct Cmd {
     /// force download and build the latest node
-    #[argh(option)]
+    #[argh(switch)]
     pub rebuild: bool,
 }
 
