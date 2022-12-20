@@ -179,7 +179,7 @@ pub enum DePoolType {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", tag = "type")]
 pub enum AppConfigValidatorSigner {
     Simple {
         #[serde(default, skip_serializing_if = "Option::is_none")]
