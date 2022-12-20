@@ -16,7 +16,7 @@ pub struct Cmd {
     #[argh(subcommand)]
     subcommand: Option<SubCmd>,
     /// force download and build the latest node
-    #[argh(option)]
+    #[argh(switch)]
     rebuild: bool,
 }
 
