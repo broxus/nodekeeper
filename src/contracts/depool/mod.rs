@@ -7,6 +7,7 @@ use nekoton_abi::{
     PackAbiPlain, TokenValueExt, UnpackAbi, UnpackAbiPlain, UnpackFirst,
 };
 use nekoton_utils::SimpleClock;
+use num::ToPrimitive;
 use ton_abi::contract::ABI_VERSION_2_2;
 use ton_block::{Deserializable, Serializable};
 
@@ -32,6 +33,9 @@ pub struct DePool {
 
 impl DePool {
     pub const INITIAL_BALANCE: u128 = 30 * ONE_EVER;
+    pub const CRITICAL_BALANCE: u128 = 20 * ONE_EVER;
+    pub const INITIAL_PROXY_BALANCE: u128 = 3 * ONE_EVER;
+    pub const MIN_PROXY_BALANCE: u128 = 2 * ONE_EVER;
 
     pub fn new(
         ty: DePoolType,
@@ -121,6 +125,71 @@ impl DePool {
 
     pub fn ticktock(&self) -> Result<InternalMessage> {
         Ok(self.internal_message_to_self(ONE_EVER, common::ticktock().encode_internal_input(&[])?))
+    }
+
+    pub async fn maintain_balances(&self) -> Result<Vec<InternalMessage>> {
+        let account = self
+            .subscription
+            .get_account_state(&self.address)
+            .await?
+            .context("DePool not deployed")?;
+
+        let mut messages = Vec::new();
+
+        let depool_info = self.get_info(&account)?;
+
+        // Check depool balance
+        let depool_balance = {
+            let tokens = self.run_local(&account, common::get_depool_balance(), &[])?;
+            match tokens.into_iter().next() {
+                Some(ton_abi::Token {
+                    value: ton_abi::TokenValue::Int(ton_abi::Int { number, .. }),
+                    ..
+                }) => number,
+                _ => return Err(nekoton_abi::UnpackerError::InvalidAbi.into()),
+            }
+        };
+
+        let critical_balance = num::BigInt::from(Self::CRITICAL_BALANCE);
+        if depool_balance <= critical_balance {
+            let remaining = num::BigInt::from(Self::INITIAL_BALANCE) - depool_balance;
+            if let Some(remaining) = remaining.to_u128() {
+                messages.push(self.internal_message_to_self(
+                    remaining,
+                    &common::receive_funds().encode_internal_input(&[])?,
+                ));
+            }
+        }
+
+        // Check proxies
+        for proxy in depool_info.proxies {
+            let account = self
+                .subscription
+                .get_account_state(&proxy)
+                .await
+                .context("failed to get proxy state")?
+                .context("proxy not deployed")?;
+
+            let proxy_balance = match account.storage.state {
+                ton_block::AccountState::AccountActive { .. } => account.storage.balance.grams.0,
+                ton_block::AccountState::AccountFrozen { .. } => {
+                    anyhow::bail!("proxy {proxy} frozen");
+                }
+                ton_block::AccountState::AccountUninit => {
+                    anyhow::bail!("proxy {proxy} not deployed");
+                }
+            };
+
+            if proxy_balance <= Self::MIN_PROXY_BALANCE {
+                messages.push(InternalMessage {
+                    amount: Self::INITIAL_PROXY_BALANCE - proxy_balance,
+                    dst: proxy,
+                    payload: Default::default(),
+                });
+            }
+        }
+
+        Ok(messages)
     }
 
     pub fn add_ordinary_stake(&self, amount: u64) -> Result<InternalMessage> {
@@ -496,6 +565,23 @@ mod common {
     pub fn ticktock() -> &'static ton_abi::Function {
         once!(ton_abi::Function, || {
             FunctionBuilder::new("ticktock").build()
+        })
+    }
+
+    pub fn receive_funds() -> &'static ton_abi::Function {
+        once!(ton_abi::Function, || {
+            FunctionBuilder::new("receiveFunds").build()
+        })
+    }
+
+    pub fn get_depool_balance() -> &'static ton_abi::Function {
+        once!(ton_abi::Function, || {
+            FunctionBuilder::new("getDePoolBalance")
+                .time_header()
+                .expire_header()
+                .abi_version(ton_abi::contract::ABI_VERSION_2_0)
+                .output("balance", ton_abi::ParamType::Int(256))
+                .build()
         })
     }
 

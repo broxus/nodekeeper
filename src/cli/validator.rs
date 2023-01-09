@@ -668,6 +668,11 @@ impl AppConfigValidatorDePool {
         );
         anyhow::ensure!(depool_info.proxies.len() == 2, "invalid DePool proxies");
 
+        // Ensure that depool and proxy balances are enough
+        self.maintain_balances(&wallet, &depool, &ctx)
+            .await
+            .context("failed to maintain balances")?;
+
         // Update depool
         let (round_id, step) = match self
             .update_depool(&wallet, &depool, &depool_info, depool_state, &ctx)
@@ -723,6 +728,36 @@ impl AppConfigValidatorDePool {
 
         // Done
         tracing::info!("sent validator stake");
+        Ok(())
+    }
+
+    async fn maintain_balances(
+        &self,
+        wallet: &Wallet,
+        depool: &DePool,
+        ctx: &ElectionsContext<'_>,
+    ) -> Result<()> {
+        // Check and refill depool and proxy balances
+        let refill_messages = depool.maintain_balances().await?;
+        for message in refill_messages {
+            tracing::info!(
+                target = %message.dst,
+                amount = %message.amount,
+                "replenishing depool contracts"
+            );
+
+            wallet.wait_for_balance(message.amount + ONE_EVER).await?;
+
+            // Prevent shutdown during operation
+            let _guard = ctx.guard.lock().await;
+
+            // Send some funds to depool contracts
+            wallet
+                .call(message)
+                .await
+                .context("failed to replenish depool contracts")?;
+        }
+
         Ok(())
     }
 
