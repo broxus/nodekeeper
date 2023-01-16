@@ -678,8 +678,15 @@ impl ProjectDirs {
         let binary = build_node(repo_dir).await?;
 
         // Copy the binary to the expected binary path
-        std::fs::copy(binary, &self.node_binary).context("failed to copy node binary")?;
-        Ok(())
+        match std::fs::copy(&binary, &self.node_binary) {
+            Ok(_) => Ok(()),
+            Err(e) if matches!(e.raw_os_error(), Some(libc::ETXTBSY)) => {
+                std::fs::remove_file(&self.node_binary).context("failed to remove binary")?;
+                std::fs::copy(binary, &self.node_binary).context("failed to copy node binary")?;
+                Ok(())
+            }
+            Err(e) => Err(e).context("failed to copy node binary"),
+        }
     }
 }
 
