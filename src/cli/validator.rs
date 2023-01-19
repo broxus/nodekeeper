@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use argh::FromArgs;
 use broxus_util::now;
 use futures_util::FutureExt;
+use rand::Rng;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -46,6 +47,10 @@ pub struct Cmd {
     #[argh(option, default = "2.0")]
     retry_interval_multiplier: f64,
 
+    /// forces stakes to be sent right after the start of each election
+    #[argh(switch)]
+    disable_random_shift: bool,
+
     /// ignore contracts deployment
     #[argh(switch)]
     ignore_deploy: bool,
@@ -63,6 +68,7 @@ impl Cmd {
             stake_unfreeze_offset: self.stake_unfreeze_offset,
             elections_start_offset: self.elections_start_offset,
             elections_end_offset: self.elections_end_offset,
+            disable_random_shift: self.disable_random_shift,
             ignore_deploy: self.ignore_deploy,
             last_params: Default::default(),
             guard: Arc::new(Mutex::new(())),
@@ -124,6 +130,7 @@ struct ValidationManager {
     stake_unfreeze_offset: u32,
     elections_start_offset: u32,
     elections_end_offset: u32,
+    disable_random_shift: bool,
     ignore_deploy: bool,
     last_params: parking_lot::Mutex<Option<AppConfigValidator>>,
     guard: Arc<Mutex<()>>,
@@ -136,6 +143,8 @@ impl ValidationManager {
         tracing::info!("started validation loop");
 
         let dirs = self.ctx.dirs();
+
+        let mut random_shift = None;
 
         let mut interval = 0u32;
         loop {
@@ -204,6 +213,7 @@ impl ValidationManager {
                 Timeline::BeforeElections {
                     until_elections_start,
                 } => {
+                    random_shift = None; // reset random shift before each elections
                     tracing::info!("waiting for the elections to start");
                     interval = until_elections_start + self.elections_start_offset;
                     continue;
@@ -214,23 +224,37 @@ impl ValidationManager {
                     until_elections_end,
                     elections_end,
                 } => {
-                    if let Some(offset) = self
-                        .elections_start_offset
-                        .checked_sub(since_elections_start)
-                    {
-                        // Wait a bit after elections start
-                        interval = offset;
-                        continue;
+                    let random_shift = match random_shift {
+                        Some(shift) => shift,
+                        None if self.disable_random_shift => *random_shift.insert(0),
+                        None => {
+                            // Compute the random offset in the first 1/4 of elections
+                            let range = (since_elections_start + until_elections_end)
+                                .saturating_sub(self.elections_end_offset)
+                                .saturating_sub(self.elections_start_offset)
+                                / 4;
+                            *random_shift.insert(rand::thread_rng().gen_range(0..range))
+                        }
+                    };
+
+                    let start_offset = self.elections_start_offset + random_shift;
+
+                    if let Some(offset) = start_offset.checked_sub(since_elections_start) {
+                        if offset > 0 {
+                            // Wait a bit after elections start
+                            interval = offset;
+                            continue;
+                        }
                     } else if let Some(offset) =
                         self.elections_end_offset.checked_sub(until_elections_end)
                     {
                         // Elections will end soon, attempts are doomed
                         interval = offset;
                         continue;
-                    } else {
-                        // We can participate, remember elections end timestamp
-                        elections_end
                     }
+
+                    // We can participate, remember elections end timestamp
+                    elections_end
                 }
                 // Elections were already finished, wait for the new round
                 Timeline::AfterElections { until_round_end } => {
