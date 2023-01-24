@@ -165,5 +165,19 @@ pub enum DePoolType {
     #[serde(rename = "default_v3")]
     DefaultV3,
     #[serde(rename = "stever_v1")]
-    StEver,
+    StEverV1,
+    #[serde(rename = "stever_v2")]
+    StEverV2,
+}
+
+impl DePoolType {
+    pub const LATEST_STEVER: Self = Self::StEverV2;
+
+    pub fn is_default(&self) -> bool {
+        matches!(self, Self::DefaultV3)
+    }
+
+    pub fn is_stever(&self) -> bool {
+        !self.is_default()
+    }
 }

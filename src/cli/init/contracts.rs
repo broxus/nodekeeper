@@ -264,7 +264,7 @@ fn prepare_new_depool(
         .default(0)
         .interact()?
     {
-        0 => DePoolType::StEver,
+        0 => DePoolType::LATEST_STEVER,
         _ => DePoolType::DefaultV3,
     };
 
@@ -326,7 +326,7 @@ fn prepare_new_depool(
     };
 
     // Configure stEVER strategies stuff
-    if let DePoolType::StEver = depool_type {
+    if depool_type.is_stever() {
         let strategy = if is_new_wallet || is_new_depool {
             // Always deploy new strategy is new keys were generated
             StrategyAction::DeployNew.run(theme)?
@@ -405,7 +405,7 @@ fn prepare_existing_depool(
     };
 
     // Configure stEVER strategies stuff
-    if let DePoolType::StEver = depool_type {
+    if depool_type.is_stever() {
         let items = StrategyAction::all();
         let action = Select::with_theme(theme)
             .items(&items)
@@ -425,7 +425,7 @@ impl DePoolType {
         address: &ton_block::MsgAddressInt,
         pubkey: &ed25519_dalek::PublicKey,
     ) -> Result<Option<Self>> {
-        for ty in [Self::DefaultV3, Self::StEver] {
+        for ty in [Self::DefaultV3, Self::StEverV1, Self::StEverV2] {
             if address == &ty.compute_depool_address(pubkey)? {
                 return Ok(Some(ty));
             }

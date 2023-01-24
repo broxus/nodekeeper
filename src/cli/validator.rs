@@ -577,7 +577,7 @@ impl AppConfigValidatorDePool {
         }
 
         // Handle stEVER depool case
-        if let DePoolType::StEver = self.depool_type {
+        if self.depool_type.is_stever() {
             let depool_state = depool.get_state().await?;
 
             // Get allowed participants

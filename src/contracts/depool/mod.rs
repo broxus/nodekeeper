@@ -207,7 +207,7 @@ impl DePool {
         self.ensure_stever()?;
         Ok(self.internal_message_to_self(
             ONE_EVER,
-            stever_v1::set_allowed_participant()
+            stever::set_allowed_participant()
                 .encode_internal_input(&[address.clone().token_value().named("addr")])?,
         ))
     }
@@ -221,7 +221,7 @@ impl DePool {
 
         let result = match self.ty {
             DePoolType::DefaultV3 => common::get_participant_info(),
-            DePoolType::StEver => stever_v1::get_participant_info(),
+            DePoolType::StEverV1 | DePoolType::StEverV2 => stever::get_participant_info(),
         }
         .run_local(
             &SimpleClock,
@@ -255,8 +255,8 @@ impl DePool {
         state: &ton_block::AccountStuff,
     ) -> Result<Vec<ton_block::MsgAddressInt>> {
         self.ensure_stever()?;
-        let addresses: stever_v1::ParticipantsMap = self
-            .run_local(state, stever_v1::allowed_participants(), &[])?
+        let addresses: stever::ParticipantsMap = self
+            .run_local(state, stever::allowed_participants(), &[])?
             .unpack_first()?;
         Ok(addresses.into_keys().collect())
     }
@@ -281,10 +281,8 @@ impl DePool {
     }
 
     fn ensure_stever(&self) -> Result<()> {
-        match self.ty {
-            DePoolType::DefaultV3 => anyhow::bail!("expected StEver depool"),
-            DePoolType::StEver => Ok(()),
-        }
+        anyhow::ensure!(self.ty.is_stever(), "expected StEver depool");
+        Ok(())
     }
 
     fn external_message_to_self<T>(&self, body: T) -> ton_block::Message
@@ -366,7 +364,8 @@ macro_rules! impl_getters(
 
 impl_getters!(DePoolType, depool_tvc, proxy_code, {
     DefaultV3 => ("./v3/DePool.tvc", "./v3/DePoolProxy.code"),
-    StEver => ("./stever/DePool.tvc", "./stever/DePoolProxy.code"),
+    StEverV1 => ("./stever/DePoolV1.tvc", "./stever/DePoolProxy.code"),
+    StEverV2 => ("./stever/DePoolV2.tvc", "./stever/DePoolProxy.code"),
 });
 
 #[derive(Clone, PackAbiPlain, KnownParamTypePlain)]
@@ -618,7 +617,7 @@ mod common {
     }
 }
 
-mod stever_v1 {
+mod stever {
     use super::*;
 
     pub fn get_participant_info() -> &'static ton_abi::Function {
