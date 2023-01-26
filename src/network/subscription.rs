@@ -21,6 +21,7 @@ pub struct Subscription {
     last_mc_block: ArcSwapOption<StoredMcBlock>,
     subscription_count: AtomicUsize,
     subscriptions_changed: Arc<Notify>,
+    subscription_loop_step: Arc<Notify>,
     mc_subscriptions: AccountSubscriptions,
     sc_subscriptions: AccountSubscriptions,
     _cancellation: DropGuard,
@@ -36,6 +37,7 @@ impl Subscription {
             last_mc_block: Default::default(),
             subscription_count: Default::default(),
             subscriptions_changed: Default::default(),
+            subscription_loop_step: Default::default(),
             mc_subscriptions: Default::default(),
             sc_subscriptions: Default::default(),
             _cancellation: cancellation.clone().drop_guard(),
@@ -149,7 +151,7 @@ impl Subscription {
         };
 
         // Insert pending message
-        let rx = {
+        let (subscription_loop_works, rx) = {
             let mut subscription = subscriptions.entry(dst).or_default();
 
             let rx = match subscription.pending_messages.entry(msg_hash) {
@@ -164,13 +166,19 @@ impl Subscription {
                 hash_map::Entry::Occupied(_) => anyhow::bail!("message already sent"),
             };
 
+            // Start waiting for the subscription loop to start
+            let subscription_loop_works = self.subscription_loop_step.notified();
+
             // Notify waiters while pending messages is still acquired
             self.subscription_count.fetch_add(1, Ordering::Release);
             self.subscriptions_changed.notify_waiters();
 
             // Drop the lock
-            rx
+            (subscription_loop_works, rx)
         };
+
+        // Wait until subscription loop was definitely started
+        subscription_loop_works.await;
 
         // Send the message
         if let Err(e) = self.node_tcp_rpc.send_message(data).await {
@@ -242,12 +250,14 @@ impl Subscription {
         rx
     }
 
-    async fn make_blocks_step(&self) -> Result<bool> {
+    async fn make_blocks_step(&self) -> Result<()> {
         // Get last masterchain block
         let last_mc_block = self
             .get_last_mc_block()
             .await
             .context("failed to get last mc block")?;
+
+        self.subscription_loop_step.notify_waiters(); // messages barrier
 
         // Get next masterchain block
         let next_mc_block = self
@@ -260,6 +270,8 @@ impl Subscription {
             let info = next_mc_block.block().read_info()?;
             info.gen_utime().0
         };
+
+        self.subscription_loop_step.notify_waiters(); // messages barrier
 
         tracing::debug!("next shard blocks: {next_shard_block_ids:#?}");
 
@@ -317,40 +329,30 @@ impl Subscription {
         );
 
         self.last_mc_block.store(Some(Arc::new(StoredMcBlock {
-            gen_utime: next_mc_utime,
             data: next_mc_block,
             shards_edge,
         })));
 
         // Done
-        Ok(self.subscription_count.load(Ordering::Acquire) > 0)
+        Ok(())
     }
 
     async fn get_last_mc_block(&self) -> Result<Arc<StoredMcBlock>> {
-        let now = broxus_util::now();
+        // Always try to use the cached one
         if let Some(last_mc_block) = &*self.last_mc_block.load() {
-            if last_mc_block.gen_utime + LAST_MC_BLOCK_TTL_SEC > now {
-                tracing::debug!("reusing saved masterchain block");
-                return Ok(last_mc_block.clone());
-            }
+            return Ok(last_mc_block.clone());
         }
+        self.update_last_mc_block().await
+    }
 
+    async fn update_last_mc_block(&self) -> Result<Arc<StoredMcBlock>> {
         let stats = self.node_tcp_rpc.get_stats().await?;
         let last_mc_block = stats.try_into_running()?.last_mc_block;
         let data = self.node_udp_rpc.get_block(&last_mc_block).await?;
 
-        let gen_utime = {
-            let info = data.block().read_info()?;
-            info.gen_utime().0
-        };
-
         let shards_edge = Edge(data.shard_blocks_seq_no()?);
 
-        let block = Arc::new(StoredMcBlock {
-            gen_utime,
-            data,
-            shards_edge,
-        });
+        let block = Arc::new(StoredMcBlock { data, shards_edge });
         self.last_mc_block.store(Some(block.clone()));
         Ok(block)
     }
@@ -433,6 +435,10 @@ impl Subscription {
             !subscription.is_empty()
         });
     }
+
+    fn has_subscriptions(&self) -> bool {
+        self.subscription_count.load(Ordering::Acquire) > 0
+    }
 }
 
 #[derive(Default)]
@@ -462,14 +468,16 @@ async fn walk_blocks(subscription: Weak<Subscription>) {
         let pending_messages_changed = subscription.subscriptions_changed.clone();
         let signal = pending_messages_changed.notified();
 
-        if subscription.subscription_count.load(Ordering::Acquire) > 0 {
-            loop {
-                match subscription.make_blocks_step().await {
-                    Ok(true) => continue,
-                    Ok(false) => break,
-                    Err(e) => {
-                        tracing::error!("failed to make blocks step: {e:?}");
-                    }
+        if subscription.has_subscriptions() {
+            // Update the latest masterchain block before starting the blocks loop.
+            // All message senders will wait until `subscription_loop_step` is triggered.
+            if let Err(e) = subscription.update_last_mc_block().await {
+                tracing::error!("failed to update last mc block: {e:?}");
+            }
+
+            while subscription.has_subscriptions() {
+                if let Err(e) = subscription.make_blocks_step().await {
+                    tracing::error!("failed to make blocks step: {e:?}");
                 }
             }
         }
@@ -481,7 +489,6 @@ async fn walk_blocks(subscription: Weak<Subscription>) {
 }
 
 struct StoredMcBlock {
-    gen_utime: u32,
     data: BlockStuff,
     shards_edge: Edge,
 }
@@ -514,5 +521,3 @@ impl Drop for PendingMessage {
         }
     }
 }
-
-const LAST_MC_BLOCK_TTL_SEC: u32 = 10;
