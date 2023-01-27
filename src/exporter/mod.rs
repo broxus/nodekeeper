@@ -5,10 +5,12 @@ use pomfrit::formatter::DisplayPrometheusExt;
 
 pub use self::file_target::FileExporterTarget;
 pub use self::http_target::HttpExporterTarget;
+pub use self::stdout_target::StdoutExporterTarget;
 use crate::network::{NodeStats, NodeTcpRpc, ValidatorSetEntry};
 
 mod file_target;
 mod http_target;
+mod stdout_target;
 
 pub struct Exporter {
     node_rpc: NodeTcpRpc,

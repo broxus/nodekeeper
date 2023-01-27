@@ -6,7 +6,9 @@ use anyhow::Result;
 use argh::FromArgs;
 
 use super::CliContext;
-use crate::exporter::{Exporter, ExporterTarget, FileExporterTarget, HttpExporterTarget, Metrics};
+use crate::exporter::{
+    Exporter, ExporterTarget, FileExporterTarget, HttpExporterTarget, Metrics, StdoutExporterTarget,
+};
 use crate::network::NodeTcpRpc;
 
 #[derive(FromArgs)]
@@ -35,39 +37,40 @@ impl Cmd {
         let config = ctx.load_config()?;
         let node_rpc = NodeTcpRpc::new(config.control()?).await?;
 
-        match (self.once, self.file, self.addr) {
-            (_, None, None) => Err(ExporterError::NoExporters.into()),
-            (true, _, Some(_)) => Err(ExporterError::OnceNotSupported.into()),
-            (true, Some(file), _) => {
-                let exporter = FileExporterTarget::new(file);
-                let stats = node_rpc.get_stats().await?;
-                let metrics = Metrics {
-                    collected_at: broxus_util::now(),
-                    stats: &stats,
-                };
-                exporter.write(&metrics)
+        if !self.once {
+            let mut targets = Vec::<Box<dyn ExporterTarget>>::new();
+            if let Some(file) = self.file {
+                targets.push(Box::new(FileExporterTarget::new(file)));
             }
-            (false, file, addr) => {
-                let mut targets = Vec::<Box<dyn ExporterTarget>>::new();
-                if let Some(file) = file {
-                    targets.push(Box::new(FileExporterTarget::new(file)));
-                }
-                if let Some(addr) = addr {
-                    targets.push(Box::new(HttpExporterTarget::new(addr).await?));
-                }
+            if let Some(addr) = self.addr {
+                targets.push(Box::new(HttpExporterTarget::new(addr).await?));
+            }
+            if targets.is_empty() {
+                targets.push(Box::new(StdoutExporterTarget));
+            }
 
-                let interval = Duration::from_secs(self.interval as u64);
-                Exporter::new(node_rpc, interval, targets).serve().await;
-                Ok(())
-            }
+            let interval = Duration::from_secs(self.interval as u64);
+            Exporter::new(node_rpc, interval, targets).serve().await;
+            return Ok(());
         }
+
+        let exporter: Box<dyn ExporterTarget> = match (self.file, self.addr) {
+            (None, None) => Box::new(StdoutExporterTarget),
+            (_, Some(_)) => return Err(ExporterError::OnceNotSupported.into()),
+            (Some(file), _) => Box::new(FileExporterTarget::new(file)),
+        };
+
+        let stats = node_rpc.get_stats().await?;
+        let metrics = Metrics {
+            collected_at: broxus_util::now(),
+            stats: &stats,
+        };
+        exporter.write(&metrics)
     }
 }
 
 #[derive(thiserror::Error, Debug)]
 enum ExporterError {
-    #[error("no exporters specified")]
-    NoExporters,
-    #[error("once flag is not supported for http exporter")]
+    #[error("once flag is not supported by http exporter")]
     OnceNotSupported,
 }
