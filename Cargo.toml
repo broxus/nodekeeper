@@ -1,7 +1,11 @@
 [package]
 name = "stever"
+description = "All-in-one node management tool with stEVER depool support."
 version = "0.1.1"
+authors = ["Ivan Kalinin <i.kalinin@dexpa.io>"]
+repository = "https://github.com/broxus/stever-node-tools"
 edition = "2021"
+rust-version = "1.65"
 
 [dependencies]
 aes = "0.8"

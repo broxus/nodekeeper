@@ -1,6 +1,11 @@
-## stEVER Node Tools
+## stEVER Node Tools &emsp; [![stever-node-tools: rustc 1.65+]][Rust 1.65] [![Workflow badge]][Workflow]
 
-All-in-one node management tool with stEVER depool support
+[stever-node-tools: rustc 1.65+]: https://img.shields.io/badge/rustc-1.65+-lightgray.svg
+[Rust 1.65]: https://blog.rust-lang.org/2022/11/03/Rust-1.65.0.html
+[Workflow badge]: https://img.shields.io/github/actions/workflow/status/broxus/stever-node-tools/master.yml?branch=master
+[Workflow]: https://github.com/broxus/stever-node-tools/actions?query=workflow%3Amaster
+
+All-in-one node management tool with stEVER depool support.
 
 ## How to install
 

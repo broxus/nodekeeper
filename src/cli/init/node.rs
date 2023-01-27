@@ -639,10 +639,7 @@ fn check_systemd_service(dirs: &ProjectDirs) -> Result<()> {
         .unwrap_or_else(|| OsStr::new("stever"))
         .to_string_lossy();
 
-    println!(
-        "\nTo configure systemd services, run:\n    sudo {} init systemd",
-        current_exe
-    );
+    println!("\nTo configure systemd services, run:\n    sudo {current_exe} init systemd");
     Ok(())
 }
 
