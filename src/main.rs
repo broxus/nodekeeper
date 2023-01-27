@@ -36,9 +36,11 @@ mod cli;
 mod config;
 mod contracts;
 mod crypto;
+mod dirs;
 mod exporter;
 mod network;
 mod util;
+mod validator;
 
 #[tokio::main]
 async fn main() -> Result<()> {
