@@ -1,3 +1,8 @@
+# 0.1.2 (2023-01-30)
+
+- Added support for signature id. Signature for networks with this capability enabled will now be
+  calculated differently to prevent security issues.
+
 # 0.1.1 (2023-01-27)
 
 ### Added

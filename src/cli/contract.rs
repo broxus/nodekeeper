@@ -244,6 +244,13 @@ impl CmdSend {
         let keys = self.sign.map(StoredKeys::load_as_keypair).transpose()?;
         let state_init = parse_optional_state_init(self.state_init)?;
 
+        // Check whether the node is running
+        node_tcp_rpc.get_stats().await?.try_into_running()?;
+
+        // Create subscription
+        let subscription = Subscription::new(node_tcp_rpc, node_udp_rpc);
+        let signature_id = subscription.get_signature_id().await?;
+
         // Prepare external message
         let (expire_at, headers) =
             make_default_headers(keys.as_ref().map(|keypair| keypair.public), self.timeout);
@@ -252,7 +259,7 @@ impl CmdSend {
             &headers,
             &input,
             false,
-            keys.as_ref(),
+            keys.as_ref().map(|keypair| (keypair, signature_id)),
             Some(address.clone()),
         )?;
 
@@ -267,12 +274,6 @@ impl CmdSend {
         if let Some(state_init) = state_init {
             message.set_state_init(state_init);
         }
-
-        // Check whether the node is running
-        node_tcp_rpc.get_stats().await?.try_into_running()?;
-
-        // Create subscription
-        let subscription = Subscription::new(node_tcp_rpc, node_udp_rpc);
 
         // Send external message and wait until it is delivered
         let TransactionWithHash {
