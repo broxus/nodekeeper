@@ -98,7 +98,7 @@ impl DePool {
         .pack();
 
         self.subscription
-            .send_message_with_retires(move |timeout| {
+            .send_message_with_retires(move |timeout, signature_id| {
                 let (expire_at, header) = make_default_headers(None, timeout);
 
                 let mut message = self.external_message_to_self(
@@ -107,7 +107,7 @@ impl DePool {
                             &header,
                             &inputs,
                             false,
-                            Some(keypair),
+                            Some((keypair, signature_id)),
                             Some(self.address.clone()),
                         )
                         .context("failed to encode constructor")?,

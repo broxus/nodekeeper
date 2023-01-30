@@ -409,7 +409,7 @@ impl AppConfigValidatorSingle {
             "election as single"
         );
 
-        let wallet = Wallet::new(-1, keypair, ctx.subscription);
+        let wallet = Wallet::new(-1, keypair, ctx.subscription.clone());
         anyhow::ensure!(
             wallet.address() == &self.address,
             "validator wallet address mismatch"
@@ -439,6 +439,8 @@ impl AppConfigValidatorSingle {
         let target_balance = self.stake_per_round as u128 + 2 * ONE_EVER;
         wallet.wait_for_balance(target_balance).await?;
 
+        let signature_id = ctx.subscription.get_signature_id().await?;
+
         // Prevent shutdown while electing
         let _guard = ctx.guard.lock().await;
 
@@ -450,6 +452,7 @@ impl AppConfigValidatorSingle {
                 wallet.address(),
                 self.stake_factor.unwrap_or(DEFAULT_STAKE_FACTOR),
                 &ctx.timings,
+                signature_id,
             )
             .await
             .context("failed to prepare new validator key")?;
@@ -724,6 +727,8 @@ impl AppConfigValidatorDePool {
         // Wait until validator wallet balance is enough
         wallet.wait_for_balance(2 * ONE_EVER).await?;
 
+        let signature_id = ctx.subscription.get_signature_id().await?;
+
         // Prevent shutdown while electing
         let _guard = ctx.guard.lock().await;
 
@@ -735,6 +740,7 @@ impl AppConfigValidatorDePool {
                 proxy,
                 self.stake_factor.unwrap_or(DEFAULT_STAKE_FACTOR),
                 &ctx.timings,
+                signature_id,
             )
             .await
             .context("failed to prepare new validator key")?;

@@ -37,6 +37,7 @@ impl Cmd {
             SubCmd::Sign(cmd) => {
                 let key_hash = parse_key_hash(&cmd.key_hash)?;
                 let data = parse_optional_input(cmd.data, false)?;
+                let data = ton_abi::extend_signature_with_id(&data, cmd.signature_id);
                 let signature = rpc_node.sign(&key_hash, &data).await?;
                 serde_json::json!({
                     "signature": base64::encode(signature),
@@ -153,6 +154,10 @@ struct CmdNodeExportPubKey {
 /// Signs arbitrary data with the specified hash
 #[argh(subcommand, name = "sign")]
 struct CmdNodeSign {
+    /// optional signature id (network id).
+    #[argh(option)]
+    signature_id: Option<i32>,
+
     /// keypair hash (hex encoded string)
     #[argh(positional)]
     key_hash: String,

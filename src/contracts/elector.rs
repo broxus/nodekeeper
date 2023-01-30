@@ -53,6 +53,7 @@ impl Elector {
         address: &ton_block::MsgAddressInt,
         stake_factor: u32,
         timings: &ton_block::ConfigParam15,
+        signature_id: Option<i32>,
     ) -> Result<ton_types::Cell> {
         const TTL_OFFSET: u32 = 1000;
 
@@ -110,6 +111,8 @@ impl Elector {
         };
 
         let data_to_sign = unsigned.build_data_to_sign();
+        let data_to_sign = ton_abi::extend_signature_with_id(&data_to_sign, signature_id);
+
         let signature = rpc
             .sign(&permanent_key_hash, &data_to_sign)
             .await

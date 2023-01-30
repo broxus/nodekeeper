@@ -1,6 +1,7 @@
 use std::collections::hash_map;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use arc_swap::ArcSwapOption;
@@ -11,7 +12,7 @@ use tokio::sync::{mpsc, oneshot, Notify};
 use tokio_util::sync::{CancellationToken, DropGuard};
 use ton_block::{Deserializable, Serializable};
 
-use super::node_tcp_rpc::NodeTcpRpc;
+use super::node_tcp_rpc::{ConfigWithId, NodeTcpRpc};
 use super::node_udp_rpc::NodeUdpRpc;
 use crate::util::{split_address, BlockStuff, FxDashMap, TransactionWithHash};
 
@@ -24,6 +25,7 @@ pub struct Subscription {
     subscription_loop_step: Arc<Notify>,
     mc_subscriptions: AccountSubscriptions,
     sc_subscriptions: AccountSubscriptions,
+    global_id: tokio::sync::Mutex<Option<i32>>,
     _cancellation: DropGuard,
 }
 
@@ -40,6 +42,7 @@ impl Subscription {
             subscription_loop_step: Default::default(),
             mc_subscriptions: Default::default(),
             sc_subscriptions: Default::default(),
+            global_id: Default::default(),
             _cancellation: cancellation.clone().drop_guard(),
         });
 
@@ -115,11 +118,13 @@ impl Subscription {
 
     pub async fn send_message_with_retires<F>(&self, mut f: F) -> Result<TransactionWithHash>
     where
-        F: FnMut(u32) -> Result<(ton_block::Message, u32)>,
+        F: FnMut(u32, Option<i32>) -> Result<(ton_block::Message, u32)>,
     {
+        let signature_id = self.get_signature_id().await?;
+
         let timeout = 60;
         loop {
-            let (message, expire_at) = f(timeout)?;
+            let (message, expire_at) = f(timeout, signature_id)?;
             if let Some(tx) = self.send_message(&message, expire_at).await? {
                 break Ok(tx);
             }
@@ -248,6 +253,48 @@ impl Subscription {
         self.subscription_count.fetch_add(1, Ordering::Release);
         self.subscriptions_changed.notify_waiters();
         rx
+    }
+
+    pub async fn get_signature_id(&self) -> Result<Option<i32>> {
+        let ConfigWithId { block_id, config } = self
+            .node_tcp_rpc
+            .get_config_all()
+            .await
+            .context("failed to get blockchain config")?;
+        if !requires_signature_id(config.capabilities()) {
+            return Ok(None);
+        }
+
+        let global_id = {
+            let mut global_id = self.global_id.lock().await;
+            match *global_id {
+                // Once received, it will never change
+                Some(global_id) => global_id,
+                // Try to get the known masterchain block
+                None => {
+                    // TODO: replace with `global_id` from `getstats` when it will be available.
+                    const RETRIES: usize = 10;
+                    const INTERVAL: Duration = Duration::from_secs(1);
+
+                    let mut retries = 0;
+                    let block = loop {
+                        match self.node_udp_rpc.get_block(&block_id).await {
+                            Ok(block) => break block,
+                            Err(e) if retries < RETRIES => {
+                                tracing::error!("failed to get the latest mc block: {e:?}");
+                                tokio::time::sleep(INTERVAL).await;
+                                retries += 1;
+                            }
+                            Err(e) => return Err(e),
+                        }
+                    };
+
+                    *global_id.insert(block.block().global_id)
+                }
+            }
+        };
+
+        Ok(Some(global_id))
     }
 
     async fn make_blocks_step(&self) -> Result<()> {
@@ -520,4 +567,10 @@ impl Drop for PendingMessage {
             tx.send(None).ok();
         }
     }
+}
+
+fn requires_signature_id(capabilities: u64) -> bool {
+    const CAP_WITH_SIGNATURE_ID: u64 = 0x4000000;
+
+    capabilities & CAP_WITH_SIGNATURE_ID != 0
 }

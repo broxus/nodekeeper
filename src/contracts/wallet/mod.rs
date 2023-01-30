@@ -106,7 +106,7 @@ impl Wallet {
 
         let tx = self
             .subscription
-            .send_message_with_retires(|timeout| {
+            .send_message_with_retires(|timeout, signature_id| {
                 let (expire_at, headers) = make_default_headers(Some(self.keypair.public), timeout);
 
                 let mut message = ton_block::Message::with_ext_in_header(
@@ -122,7 +122,7 @@ impl Wallet {
                             &headers,
                             &inputs,
                             false,
-                            Some(&self.keypair),
+                            Some((&self.keypair, signature_id)),
                             Some(self.address.clone()),
                         )?
                         .into(),
