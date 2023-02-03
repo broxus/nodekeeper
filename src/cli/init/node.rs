@@ -576,49 +576,83 @@ async fn setup_binary(theme: &dyn Theme, dirs: &ProjectDirs, force: bool) -> Res
     // Ensure that binaries directory exists
     dirs.prepare_binaries_dir()?;
 
-    // Ask for the node repo
-    let repo: Url = Input::with_theme(theme)
-        .with_prompt("Node repo URL")
+    // Ask for the node repo and features
+    let args: String = Input::with_theme(theme)
+        .with_prompt("Node repo URL and features")
         .with_initial_text(DEFAULT_NODE_REPO)
         .interact_text()?;
 
-    dirs.install_node_from_repo(&repo).await?;
+    // Parse args:
+    // -b,--branch <branch>
+    // -f,--features <feature_name>+
+    let mut args = args.split(' ');
+    let repo = args.next().context("Url expected")?.parse::<Url>()?;
+
+    let mut branch = None;
+    let mut features = Vec::new();
+    'args: loop {
+        match args.next() {
+            Some("-b" | "--branch") => {
+                branch = Some(args.next().context("Expected branch name")?);
+            }
+            Some("-f" | "--features") => {
+                for feature in args.by_ref() {
+                    if feature.starts_with('-') {
+                        continue 'args;
+                    }
+                    features.push(feature);
+                }
+                anyhow::ensure!(!features.is_empty(), "Expected features list");
+            }
+            Some(name) => anyhow::bail!("Unknown argument: {name}"),
+            None => break,
+        }
+    }
+
+    dirs.install_node_from_repo(&repo, branch, &features)
+        .await?;
     Ok(true)
 }
 
-async fn clone_repo<P: AsRef<Path>>(url: &Url, target: P) -> Result<()> {
+async fn clone_repo<P: AsRef<Path>>(url: &Url, branch: Option<&str>, target: P) -> Result<()> {
     // Remove old repo if it exists
     let target = target.as_ref();
     if target.exists() {
         std::fs::remove_dir_all(target).context("failed to remove old git directory")?;
     }
 
+    let mut command = Command::new("git");
+    command
+        .stdout(Stdio::piped())
+        .arg("clone")
+        .arg("--recursive");
+
+    if let Some(branch) = branch {
+        command.arg("--branch").arg(branch);
+    }
+
     // git clone to the target folder
-    exec(
-        Command::new("git")
-            .stdout(Stdio::piped())
-            .arg("clone")
-            .arg("--recursive")
-            .arg(url.to_string())
-            .arg(target),
-    )
-    .await
-    .context("failed to clone repo")
+    exec(command.arg(url.to_string()).arg(target))
+        .await
+        .context("failed to clone repo")
 }
 
-async fn build_node<P: AsRef<Path>>(target: P) -> Result<PathBuf> {
+async fn build_node<P: AsRef<Path>>(target: P, features: &[&str]) -> Result<PathBuf> {
     let target = target.as_ref();
 
+    let mut command = Command::new("cargo");
+    command
+        .current_dir(target)
+        .stdout(Stdio::piped())
+        .arg("build")
+        .arg("--release");
+
+    if !features.is_empty() {
+        command.arg("--features").args(features);
+    }
+
     // cargo build in the target folder
-    exec(
-        Command::new("cargo")
-            .current_dir(target)
-            .stdout(Stdio::piped())
-            .arg("build")
-            .arg("--release"),
-    )
-    .await
-    .context("failed to build node")?;
+    exec(&mut command).await.context("failed to build node")?;
 
     // Return the path to the freshly built binary
     Ok(target.join("target").join("release").join("ton_node"))
@@ -661,7 +695,12 @@ impl ProjectDirs {
         Ok(())
     }
 
-    pub async fn install_node_from_repo(&self, repo: &Url) -> Result<()> {
+    pub async fn install_node_from_repo(
+        &self,
+        repo: &Url,
+        branch: Option<&str>,
+        features: &[&str],
+    ) -> Result<()> {
         // Create git cache directory if it doesn't exist
         let git_dir = &self.git_cache_dir;
         if !git_dir.exists() {
@@ -671,8 +710,8 @@ impl ProjectDirs {
         let repo_dir = git_dir.join("ton-labs-node");
 
         // Clone repo
-        clone_repo(repo, &repo_dir).await?;
-        let binary = build_node(repo_dir).await?;
+        clone_repo(repo, branch, &repo_dir).await?;
+        let binary = build_node(repo_dir, features).await?;
 
         // Copy the binary to the expected binary path
         match std::fs::copy(&binary, &self.node_binary) {

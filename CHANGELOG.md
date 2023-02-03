@@ -1,7 +1,11 @@
-# 0.1.2 (2023-01-30)
+# 0.1.2 (2023-02-03)
 
 - Added support for signature id. Signature for networks with this capability enabled will now be
   calculated differently to prevent security issues.
+- Added support for cloning the specific branch in repo and build the node with specified features.
+  While initializing the node with `stever init`, add these flags after the repo url:
+    - `-b,--branch <branch>` - branch name;
+    - `-f,--features <feature>...` - list of features for `cargo build`;
 
 # 0.1.1 (2023-01-27)
 
