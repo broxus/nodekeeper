@@ -628,6 +628,7 @@ async fn clone_repo<P: AsRef<Path>>(url: &Url, branch: Option<&str>, target: P) 
         .arg("--recursive");
 
     if let Some(branch) = branch {
+        println!("Using branch: {branch}");
         command.arg("--branch").arg(branch);
     }
 
@@ -648,7 +649,8 @@ async fn build_node<P: AsRef<Path>>(target: P, features: &[&str]) -> Result<Path
         .arg("--release");
 
     if !features.is_empty() {
-        command.arg("--features").args(features);
+        println!("Using features: {features:?}");
+        command.arg("--features").arg(features.join(" "));
     }
 
     // cargo build in the target folder
