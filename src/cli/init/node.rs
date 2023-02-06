@@ -198,6 +198,9 @@ fn load_node_config(dirs: &ProjectDirs, template: &Option<Template>) -> Result<N
     let node_log_config = &dirs.node_log_config;
     if !node_log_config.exists() || matches!(template, Some(t) if t.general.reset_logger_config) {
         dirs.store_node_log_config(&NodeLogConfig::generate())?;
+        if template.is_some() {
+            println!("Logger config overwritten");
+        }
     }
 
     let node_config = &dirs.node_config;
@@ -205,6 +208,9 @@ fn load_node_config(dirs: &ProjectDirs, template: &Option<Template>) -> Result<N
         // Generate and save default node config
         let node_config = NodeConfig::generate()?;
         dirs.store_node_config(&node_config)?;
+        if template.is_some() {
+            println!("Node config overwritten");
+        }
         return Ok(node_config);
     }
 
@@ -218,6 +224,9 @@ fn load_app_config(dirs: &ProjectDirs, template: &Option<Template>) -> Result<Ap
         // Generate and save default app config
         let app_config = AppConfig::default();
         dirs.store_app_config(&app_config)?;
+        if template.is_some() {
+            println!("App config overwritten");
+        }
         return Ok(app_config);
     }
 
@@ -253,6 +262,7 @@ fn setup_control_server(
             let client_port = existing_client.server_address.port();
             if existing_client.server_address.port() != existing_server.address.port() {
                 let port = if template.is_some() {
+                    println!("Using server control port: {server_port}");
                     server_port
                 } else {
                     match Select::with_theme(theme)
@@ -294,6 +304,10 @@ fn setup_control_server(
                     return Ok(false);
                 }
 
+                if template.is_some() {
+                    println!("Control server pubkey updated");
+                }
+
                 // Update public key
                 existing_client.server_pubkey = server_pubkey;
                 client_changed = true;
@@ -316,6 +330,10 @@ fn setup_control_server(
                             .interact()?
                             == 0
                     };
+
+                    if template.is_some() && !append {
+                        println!("Control client keys replaced");
+                    }
 
                     if !append {
                         clients.clear();
@@ -375,6 +393,10 @@ fn setup_control_server(
                             == 0
                     };
 
+                    if template.is_some() && !append {
+                        println!("Control client keys replaced");
+                    }
+
                     // Add or replace clients config
                     if !append {
                         clients.clear();
@@ -394,6 +416,10 @@ fn setup_control_server(
                 client_key,
             ));
             dirs.store_app_config(app_config)?;
+
+            if template.is_some() {
+                println!("Control server entry created");
+            }
 
             if node_config_changed {
                 node_config.set_control_server(&existing_server)?;
@@ -469,6 +495,10 @@ fn setup_control_server(
             // Save configs
             dirs.store_app_config(app_config)?;
             dirs.store_node_config(node_config)?;
+
+            if template.is_some() {
+                println!("Control server entry overwritten");
+            }
         }
     }
 
@@ -501,27 +531,29 @@ async fn setup_adnl(
     match (&mut app_config.adnl, node_config.get_adnl_node()?) {
         // App and node configs were already touched
         (Some(adnl_client), Some(mut adnl_node)) => {
-            let mut has_explicit_ip = false;
             if let Some(template) = template {
                 if let Some(explicit_ip) = template.adnl.public_ip {
-                    has_explicit_ip = true;
                     public_ip = Some(explicit_ip);
                 }
             }
 
             if let Some(public_ip) = public_ip {
                 // Update node ip address if it differs from the public ip
-                if has_explicit_ip
-                    || adnl_node.ip_address.ip() != &public_ip
-                        && confirm(
+                if adnl_node.ip_address.ip() != &public_ip
+                    && (template.is_some()
+                        || confirm(
                             theme,
                             false,
                             "Your public IP is different from the configured one. Update?",
-                        )?
+                        )?)
                 {
                     adnl_node.ip_address.set_ip(public_ip);
                     node_config.set_adnl_node(&adnl_node)?;
                     dirs.store_node_config(node_config)?;
+
+                    if template.is_some() {
+                        println!("Updated public IP");
+                    }
                 }
             }
 
@@ -542,6 +574,10 @@ async fn setup_adnl(
                 adnl_client.zerostate_file_hash = zerostate_file_hash;
 
                 dirs.store_app_config(app_config)?;
+
+                if template.is_some() {
+                    println!("ADNL config overwritten");
+                }
             }
         }
         // Only node config entry exists
@@ -617,12 +653,15 @@ fn setup_node_config_paths(
     node_config.set_global_config_path(&dirs.global_config)?;
 
     // Check if internal db path was already configured
-    if let Some(db_path) = node_config.get_internal_db_path()? {
+    let old_path = if let Some(db_path) = node_config.get_internal_db_path()? {
         if template.is_none() && db_path != PathBuf::from(DB_PATH_FALLBACK) {
             dirs.store_node_config(node_config)?;
             return Ok(());
         }
-    }
+        db_path
+    } else {
+        Default::default()
+    };
 
     // Ask for the internal db path
     let path = match template {
@@ -647,8 +686,13 @@ fn setup_node_config_paths(
     };
 
     // Update and save node config
-    node_config.set_internal_db_path(path)?;
-    dirs.store_node_config(node_config)
+    node_config.set_internal_db_path(&path)?;
+    dirs.store_node_config(node_config)?;
+
+    if template.is_some() && path != old_path {
+        println!("Node DB path updated");
+    }
+    Ok(())
 }
 
 async fn setup_binary(
