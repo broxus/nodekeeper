@@ -1,4 +1,21 @@
+# 0.1.3 (2023-02-06)
+
+### Added
+
+- Added support for initialization templates. Templates can be specified for `stever init` command or
+  its subcommands (except `systemd`). They are mostly used for running stever from scripts (i.e. from ansible).
+
+  See [example.toml](/templates/example.toml) for more details.
+
+- Added `--user`,`--enable` and `--start` params to the `stever init systemd` to allow using it from scripts.
+
+### Changed
+
+- Separate `stever init systemd` is now always required after the first initialization.
+
 # 0.1.2 (2023-02-03)
+
+### Added
 
 - Added support for signature id. Signature for networks with this capability enabled will now be
   calculated differently to prevent security issues.

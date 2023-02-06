@@ -1,0 +1,18 @@
+[general]
+node_db_path = "/var/ever/db"
+global_config = "ever_mainnet"
+node_repo = "https://github.com/tonlabs/ever-node"
+
+[adnl]
+port = 30100
+
+[validator]
+type = "depool"
+# DePool type: `default_v3`, `stever_v1` or `stever_v2`
+depool_type = "default_v3"
+# Minimal participant stake in nano EVERs
+min_stake = "10000000000"
+# Validator assurance in nano EVERs
+validator_assurance = "50000000000000"
+# Participant reward fraction, 1..=95
+participant_reward_fraction = 95

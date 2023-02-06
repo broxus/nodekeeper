@@ -1,0 +1,11 @@
+[general]
+node_db_path = "/var/ever/db"
+global_config = "ever_mainnet"
+node_repo = "https://github.com/tonlabs/ever-node"
+
+[adnl]
+port = 30100
+
+[validator]
+type = "single"
+stake_per_round = "100000000000000"

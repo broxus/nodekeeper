@@ -10,7 +10,7 @@ use dialoguer::{Completion, Input, Select};
 use reqwest::Url;
 use tokio::process::Command;
 
-use super::systemd::{prepare_services, start_services, systemd_daemon_reload};
+use super::Template;
 use crate::cli::{CliContext, ProjectDirs};
 use crate::config::*;
 use crate::util::*;
@@ -18,8 +18,9 @@ use crate::util::*;
 const DEFAULT_CONTROL_PORT: u16 = 5031;
 const DEFAULT_LOCAL_ADNL_PORT: u16 = 0;
 const DEFAULT_ADNL_PORT: u16 = 30100;
-const DEFAULT_NODE_REPO: &str = "https://github.com/tonlabs/ton-labs-node.git";
-const DEFAULT_NODE_DB_PATH: &str = "/var/ever/rnode";
+
+pub const DEFAULT_NODE_DB_PATH: &str = "/var/ever/rnode";
+pub const DEFAULT_NODE_REPO: &str = "https://github.com/tonlabs/ton-labs-node.git";
 
 #[derive(FromArgs)]
 /// Prepares configs and binaries
@@ -31,29 +32,33 @@ pub struct Cmd {
 }
 
 impl Cmd {
-    pub async fn run(self, theme: &dyn Theme, ctx: &CliContext) -> Result<()> {
+    pub async fn run(
+        self,
+        theme: &dyn Theme,
+        ctx: &CliContext,
+        template: &Option<Template>,
+    ) -> Result<()> {
         let dirs = ctx.dirs();
 
         // Compute steps len
-        let is_root = system::is_root();
-        let mut steps = Steps::new(2 + 2 * (is_root as usize));
+        let mut steps = Steps::new(2);
 
         steps.next("Preparing configs");
 
         // Ensure root dir exists
-        if !prepare_root_dir(theme, dirs)? {
+        if !prepare_root_dir(theme, dirs, template)? {
             return Ok(());
         }
 
         // Ensure that global config exists
-        let global_config = load_global_config(theme, dirs).await?;
+        let global_config = load_global_config(theme, dirs, template).await?;
         // Ensure that node config exists
-        let mut node_config = load_node_config(dirs)?;
+        let mut node_config = load_node_config(dirs, template)?;
         // Ensure that app config exists
-        let mut app_config = load_app_config(dirs)?;
+        let mut app_config = load_app_config(dirs, template)?;
 
         // Configure control server
-        if !setup_control_server(theme, dirs, &mut app_config, &mut node_config)? {
+        if !setup_control_server(theme, dirs, template, &mut app_config, &mut node_config)? {
             return Ok(());
         }
 
@@ -61,6 +66,7 @@ impl Cmd {
         if !setup_adnl(
             theme,
             dirs,
+            template,
             &mut app_config,
             &mut node_config,
             &global_config,
@@ -71,49 +77,43 @@ impl Cmd {
         }
 
         // Configure node config
-        setup_node_config_paths(theme, dirs, &mut node_config)?;
+        setup_node_config_paths(theme, dirs, template, &mut node_config)?;
 
         // Clone and build the node
         steps.next("Preparing binary");
-        if !setup_binary(theme, dirs, self.rebuild).await? {
+        if !setup_binary(theme, dirs, template, self.rebuild).await? {
             return Ok(());
         }
 
-        // Configure systemd services if running as root
-        if is_root {
-            // Ensure all services are created
-            steps.next("Preparing services");
-            prepare_services(theme, dirs)?;
-
-            // Reload sysetmd
-            steps.next("Reloading systemd configs");
-            systemd_daemon_reload().await?;
-
-            // Optionally start services
-            steps.next("Node is configured now. Great!");
-            start_services(theme).await?;
-        } else {
-            // Ask user about creating systemd services
-            steps.next("Node is configured now. Great!");
-            check_systemd_service(dirs)?;
-        }
+        // Notify user about creating systemd services
+        steps.next("Node is configured now. Great!");
+        check_systemd_service(dirs)?;
 
         Ok(())
     }
 }
 
-fn prepare_root_dir(theme: &dyn Theme, dirs: &ProjectDirs) -> Result<bool> {
+fn prepare_root_dir(
+    theme: &dyn Theme,
+    dirs: &ProjectDirs,
+    template: &Option<Template>,
+) -> Result<bool> {
     let root = &dirs.root;
     if root.exists() {
         // Do nothing if root directory exists
         return Ok(true);
     }
 
-    if !confirm(
-        theme,
-        root.is_absolute(),
-        format!("Create root directory? {}", note(root.display())),
-    )? {
+    let create_root_dir = match template {
+        Some(template) => template.general.create_root_dir,
+        None => confirm(
+            theme,
+            root.is_absolute(),
+            format!("Create root directory? {}", note(root.display())),
+        )?,
+    };
+
+    if !create_root_dir {
         return Ok(false);
     }
 
@@ -122,38 +122,66 @@ fn prepare_root_dir(theme: &dyn Theme, dirs: &ProjectDirs) -> Result<bool> {
     Ok(true)
 }
 
-async fn load_global_config(theme: &dyn Theme, dirs: &ProjectDirs) -> Result<GlobalConfig> {
-    selector_variant!(Action, {
-        Mainnet => "Everscale mainnet",
-        Testnet => "Everscale testnet",
-        Other => "other",
-    });
+async fn load_global_config(
+    theme: &dyn Theme,
+    dirs: &ProjectDirs,
+    template: &Option<Template>,
+) -> Result<GlobalConfig> {
+    async fn download_config(url: Url) -> Result<String> {
+        match url.scheme() {
+            "file" => match url.to_file_path() {
+                Ok(path) => {
+                    std::fs::read_to_string(path).context("failed to load global config from file")
+                }
+                Err(_) => anyhow::bail!("invalid file url"),
+            },
+            _ => reqwest::get(url)
+                .await
+                .context("failed to download global config")?
+                .text()
+                .await
+                .context("failed to download global config"),
+        }
+    }
+
+    let overwrite_config = matches!(template, Some(t) if t.general.global_config.is_some());
 
     let global_config = &dirs.global_config;
-    if !global_config.exists() {
-        // Select network static nodes config
-        let items = Action::all();
-        let data = match items[Select::with_theme(theme)
-            .with_prompt("Select network")
-            .items(&items)
-            .default(0)
-            .interact()?]
-        {
-            Action::Mainnet => Cow::Borrowed(GlobalConfig::MAINNET),
-            Action::Testnet => Cow::Borrowed(GlobalConfig::TESTNET),
-            // Try to download config
-            Action::Other => {
-                let url: Url = Input::with_theme(theme)
-                    .with_prompt("Config URL")
-                    .interact_text()?;
+    if !global_config.exists() || overwrite_config {
+        let data = match template {
+            Some(template) => match template.general.global_config.as_deref() {
+                None | Some("ever_mainnet") => Cow::Borrowed(GlobalConfig::MAINNET),
+                Some("ever_testnet") => Cow::Borrowed(GlobalConfig::MAINNET),
+                Some(url) => {
+                    let url = url.parse().context("invalid global config URL")?;
+                    download_config(url).await.map(Cow::Owned)?
+                }
+            },
+            None => {
+                selector_variant!(Action, {
+                    Mainnet => "Everscale mainnet",
+                    Testnet => "Everscale testnet",
+                    Other => "other",
+                });
 
-                reqwest::get(url)
-                    .await
-                    .context("failed to download global config")?
-                    .text()
-                    .await
-                    .context("failed to download global config")
-                    .map(Cow::Owned)?
+                // Select network static nodes config
+                let items = Action::all();
+                match items[Select::with_theme(theme)
+                    .with_prompt("Select network")
+                    .items(&items)
+                    .default(0)
+                    .interact()?]
+                {
+                    Action::Mainnet => Cow::Borrowed(GlobalConfig::MAINNET),
+                    Action::Testnet => Cow::Borrowed(GlobalConfig::TESTNET),
+                    // Try to download config
+                    Action::Other => {
+                        let url: Url = Input::with_theme(theme)
+                            .with_prompt("Config URL")
+                            .interact_text()?;
+                        download_config(url).await.map(Cow::Owned)?
+                    }
+                }
             }
         };
 
@@ -165,41 +193,51 @@ async fn load_global_config(theme: &dyn Theme, dirs: &ProjectDirs) -> Result<Glo
     GlobalConfig::load(global_config)
 }
 
-fn load_node_config(dirs: &ProjectDirs) -> Result<NodeConfig> {
+fn load_node_config(dirs: &ProjectDirs, template: &Option<Template>) -> Result<NodeConfig> {
     // Generate default log config if it doesn't exist
     let node_log_config = &dirs.node_log_config;
-    if !node_log_config.exists() {
+    if !node_log_config.exists() || matches!(template, Some(t) if t.general.reset_logger_config) {
         dirs.store_node_log_config(&NodeLogConfig::generate())?;
+        if template.is_some() {
+            println!("Logger config overwritten");
+        }
     }
 
     let node_config = &dirs.node_config;
-    if node_config.exists() {
-        // Load node config if it already exists
-        return NodeConfig::load(node_config);
+    if !node_config.exists() || matches!(template, Some(t) if t.general.reset_node_config) {
+        // Generate and save default node config
+        let node_config = NodeConfig::generate()?;
+        dirs.store_node_config(&node_config)?;
+        if template.is_some() {
+            println!("Node config overwritten");
+        }
+        return Ok(node_config);
     }
 
-    // Generate and save default node config
-    let node_config = NodeConfig::generate()?;
-    dirs.store_node_config(&node_config)?;
-    Ok(node_config)
+    // Load node config if it already exists
+    NodeConfig::load(node_config)
 }
 
-fn load_app_config(dirs: &ProjectDirs) -> Result<AppConfig> {
+fn load_app_config(dirs: &ProjectDirs, template: &Option<Template>) -> Result<AppConfig> {
     let app_config = &dirs.app_config;
-    if app_config.exists() {
-        // Load app config if it already exists
-        return AppConfig::load(app_config);
+    if !app_config.exists() || matches!(template, Some(t) if t.general.reset_app_config) {
+        // Generate and save default app config
+        let app_config = AppConfig::default();
+        dirs.store_app_config(&app_config)?;
+        if template.is_some() {
+            println!("App config overwritten");
+        }
+        return Ok(app_config);
     }
 
-    // Generate and save default app config
-    let app_config = AppConfig::default();
-    dirs.store_app_config(&app_config)?;
-    Ok(app_config)
+    // Load app config if it already exists
+    AppConfig::load(app_config)
 }
 
 fn setup_control_server(
     theme: &dyn Theme,
     dirs: &ProjectDirs,
+    template: &Option<Template>,
     app_config: &mut AppConfig,
     node_config: &mut NodeConfig,
 ) -> Result<bool> {
@@ -223,27 +261,32 @@ fn setup_control_server(
             let server_port = existing_server.address.port();
             let client_port = existing_client.server_address.port();
             if existing_client.server_address.port() != existing_server.address.port() {
-                let port = match Select::with_theme(theme)
-                    .with_prompt("App config has different control port. What to do?")
-                    .item(format!(
-                        "use control port from the node {}",
-                        note(server_port)
-                    ))
-                    .item(format!(
-                        "use control port from this app {}",
-                        note(client_port)
-                    ))
-                    .item("specify custom port")
-                    .default(0)
-                    .interact()?
-                {
-                    // Use port from the node config
-                    0 => server_port,
-                    // Use port from the app config
-                    1 => client_port,
-                    _ => Input::with_theme(theme)
-                        .with_prompt("Specify control port")
-                        .interact_text()?,
+                let port = if template.is_some() {
+                    println!("Using server control port: {server_port}");
+                    server_port
+                } else {
+                    match Select::with_theme(theme)
+                        .with_prompt("App config has different control port. What to do?")
+                        .item(format!(
+                            "use control port from the node {}",
+                            note(server_port)
+                        ))
+                        .item(format!(
+                            "use control port from this app {}",
+                            note(client_port)
+                        ))
+                        .item("specify custom port")
+                        .default(0)
+                        .interact()?
+                    {
+                        // Use port from the node config
+                        0 => server_port,
+                        // Use port from the app config
+                        1 => client_port,
+                        _ => Input::with_theme(theme)
+                            .with_prompt("Specify control port")
+                            .interact_text()?,
+                    }
                 };
 
                 client_changed |= port != client_port;
@@ -257,8 +300,12 @@ fn setup_control_server(
             // Ensure that control public key is the same
             let server_pubkey = ed25519::PublicKey::from(&existing_server.server_key);
             if server_pubkey != existing_client.server_pubkey {
-                if !confirm(theme, true, "Server pubkey mismatch. Update?")? {
+                if template.is_none() && !confirm(theme, true, "Server pubkey mismatch. Update?")? {
                     return Ok(false);
+                }
+
+                if template.is_some() {
+                    println!("Control server pubkey updated");
                 }
 
                 // Update public key
@@ -270,14 +317,23 @@ fn setup_control_server(
             if let Some(clients) = &mut existing_server.clients {
                 let client_pubkey = ed25519::PublicKey::from(&existing_client.client_secret);
                 if !clients.contains(&client_pubkey) {
-                    let append = clients.is_empty()
-                        || Select::with_theme(theme)
+                    let append = if clients.is_empty() {
+                        true
+                    } else if let Some(template) = template {
+                        template.control.node_key_behavior.is_append()
+                    } else {
+                        Select::with_theme(theme)
                             .with_prompt("Node config has some clients specified. What to do?")
                             .item("append")
                             .item("replace")
                             .default(0)
                             .interact()?
-                            == 0;
+                            == 0
+                    };
+
+                    if template.is_some() && !append {
+                        println!("Control client keys replaced");
+                    }
 
                     if !append {
                         clients.clear();
@@ -300,11 +356,13 @@ fn setup_control_server(
         }
         // Only node config entry exists
         (None, Some(mut existing_server)) => {
-            if !confirm(
-                theme,
-                true,
-                "App config doesn't have control server entry. Create?",
-            )? {
+            if template.is_none()
+                && !confirm(
+                    theme,
+                    true,
+                    "App config doesn't have control server entry. Create?",
+                )?
+            {
                 return Ok(false);
             }
 
@@ -314,21 +372,30 @@ fn setup_control_server(
             // Update node config clients entry
             let node_config_changed = match &mut existing_server.clients {
                 // Explicitly ask about allowing any client to connect
-                None if !confirm(theme, false, "Allow any clients?")? => {
+                None if template.is_some() || !confirm(theme, false, "Allow any clients?")? => {
                     existing_server.clients = Some(vec![ed25519::PublicKey::from(&client_key)]);
                     println!("Generated new client keys");
                     true
                 }
                 None => false,
                 Some(clients) => {
-                    let append = clients.is_empty()
-                        || Select::with_theme(theme)
+                    let append = if clients.is_empty() {
+                        true
+                    } else if let Some(template) = template {
+                        template.control.node_key_behavior.is_append()
+                    } else {
+                        Select::with_theme(theme)
                             .with_prompt("Node config has some clients specified. What to do?")
                             .item("append")
                             .item("replace")
                             .default(0)
                             .interact()?
-                            == 0;
+                            == 0
+                    };
+
+                    if template.is_some() && !append {
+                        println!("Control client keys replaced");
+                    }
 
                     // Add or replace clients config
                     if !append {
@@ -350,6 +417,10 @@ fn setup_control_server(
             ));
             dirs.store_app_config(app_config)?;
 
+            if template.is_some() {
+                println!("Control server entry created");
+            }
+
             if node_config_changed {
                 node_config.set_control_server(&existing_server)?;
                 dirs.store_node_config(node_config)?;
@@ -357,40 +428,51 @@ fn setup_control_server(
         }
         // Server config entry doesn't exist
         (existing_client, None) => {
-            if !confirm(
-                theme,
-                true,
-                "Node config doesn't have control server entry. Create?",
-            )? {
+            if template.is_none()
+                && !confirm(
+                    theme,
+                    true,
+                    "Node config doesn't have control server entry. Create?",
+                )?
+            {
                 return Ok(false);
             }
 
-            if existing_client.is_some()
+            if template.is_none()
+                && existing_client.is_some()
                 && !confirm(theme, false, "Overwrite app control server config?")?
             {
                 return Ok(false);
             }
 
             // Configure control server
-            const LISTEN_ADDR_ITEMS: [(&str, Ipv4Addr); 2] = [
-                ("localhost", Ipv4Addr::LOCALHOST),
-                ("any", Ipv4Addr::UNSPECIFIED),
-            ];
+            let listen_addr = match template {
+                Some(template) => template.control.listen_addr,
+                None => {
+                    const LISTEN_ADDR_ITEMS: [(&str, Ipv4Addr); 2] = [
+                        ("localhost", Ipv4Addr::LOCALHOST),
+                        ("any", Ipv4Addr::UNSPECIFIED),
+                    ];
 
-            // Select listen address
-            let listen_addr = Select::with_theme(theme)
-                .with_prompt("Control server listen address")
-                .item(LISTEN_ADDR_ITEMS[0].0)
-                .item(LISTEN_ADDR_ITEMS[1].0)
-                .default(0)
-                .interact()?;
-            let listen_addr = LISTEN_ADDR_ITEMS[listen_addr].1;
+                    // Select listen address
+                    let listen_addr = Select::with_theme(theme)
+                        .with_prompt("Control server listen address")
+                        .item(LISTEN_ADDR_ITEMS[0].0)
+                        .item(LISTEN_ADDR_ITEMS[1].0)
+                        .default(0)
+                        .interact()?;
+                    LISTEN_ADDR_ITEMS[listen_addr].1
+                }
+            };
 
             // Select control port
-            let control_port = Input::with_theme(theme)
-                .with_prompt("Specify control port")
-                .with_initial_text(control_port.to_string())
-                .interact()?;
+            let control_port = match template {
+                Some(template) => template.control.port.unwrap_or(control_port),
+                None => Input::with_theme(theme)
+                    .with_prompt("Specify control port")
+                    .with_initial_text(control_port.to_string())
+                    .interact()?,
+            };
 
             let addr = SocketAddrV4::new(listen_addr, control_port);
 
@@ -413,6 +495,10 @@ fn setup_control_server(
             // Save configs
             dirs.store_app_config(app_config)?;
             dirs.store_node_config(node_config)?;
+
+            if template.is_some() {
+                println!("Control server entry overwritten");
+            }
         }
     }
 
@@ -422,6 +508,7 @@ fn setup_control_server(
 async fn setup_adnl(
     theme: &dyn Theme,
     dirs: &ProjectDirs,
+    template: &Option<Template>,
     app_config: &mut AppConfig,
     node_config: &mut NodeConfig,
     global_config: &GlobalConfig,
@@ -435,7 +522,7 @@ async fn setup_adnl(
         .unwrap_or(DEFAULT_ADNL_PORT);
 
     // Get our public ip
-    let public_ip = public_ip::addr_v4().await;
+    let mut public_ip = public_ip::addr_v4().await;
 
     // Get zerostate file hash from global config
     let zerostate_file_hash = *global_config.zero_state.file_hash.as_array();
@@ -444,18 +531,29 @@ async fn setup_adnl(
     match (&mut app_config.adnl, node_config.get_adnl_node()?) {
         // App and node configs were already touched
         (Some(adnl_client), Some(mut adnl_node)) => {
+            if let Some(template) = template {
+                if let Some(explicit_ip) = template.adnl.public_ip {
+                    public_ip = Some(explicit_ip);
+                }
+            }
+
             if let Some(public_ip) = public_ip {
                 // Update node ip address if it differs from the public ip
                 if adnl_node.ip_address.ip() != &public_ip
-                    && confirm(
-                        theme,
-                        false,
-                        "Your public IP is different from the configured one. Update?",
-                    )?
+                    && (template.is_some()
+                        || confirm(
+                            theme,
+                            false,
+                            "Your public IP is different from the configured one. Update?",
+                        )?)
                 {
                     adnl_node.ip_address.set_ip(public_ip);
                     node_config.set_adnl_node(&adnl_node)?;
                     dirs.store_node_config(node_config)?;
+
+                    if template.is_some() {
+                        println!("Updated public IP");
+                    }
                 }
             }
 
@@ -465,7 +563,9 @@ async fn setup_adnl(
                 || adnl_client.server_pubkey != server_pubkey
                 || adnl_client.zerostate_file_hash != zerostate_file_hash
             {
-                if !confirm(theme, false, "ADNL node configuration mismatch. Update?")? {
+                if template.is_none()
+                    && !confirm(theme, false, "ADNL node configuration mismatch. Update?")?
+                {
                     return Ok(false);
                 }
 
@@ -474,6 +574,10 @@ async fn setup_adnl(
                 adnl_client.zerostate_file_hash = zerostate_file_hash;
 
                 dirs.store_app_config(app_config)?;
+
+                if template.is_some() {
+                    println!("ADNL config overwritten");
+                }
             }
         }
         // Only node config entry exists
@@ -491,19 +595,29 @@ async fn setup_adnl(
         // Node config entry doesn't exist
         (_, None) => {
             // Ask for the public ip
-            let addr: Ipv4Addr = {
-                let mut input = Input::with_theme(theme);
-                if let Some(public_ip) = public_ip {
-                    input.with_initial_text(public_ip.to_string());
+            let addr: Ipv4Addr = match template {
+                Some(template) => template
+                    .adnl
+                    .public_ip
+                    .or(public_ip)
+                    .context("failed to resolve public ip")?,
+                None => {
+                    let mut input = Input::with_theme(theme);
+                    if let Some(public_ip) = public_ip {
+                        input.with_initial_text(public_ip.to_string());
+                    }
+                    input.with_prompt("Enter public ip").interact_text()?
                 }
-                input.with_prompt("Enter public ip").interact_text()?
             };
 
             // Ask for the adnl port
-            let adnl_port = Input::with_theme(theme)
-                .with_prompt("Specify server ADNL port")
-                .with_initial_text(adnl_port.to_string())
-                .interact()?;
+            let adnl_port = match template {
+                Some(template) => template.adnl.port.unwrap_or(adnl_port),
+                None => Input::with_theme(theme)
+                    .with_prompt("Specify server ADNL port")
+                    .with_initial_text(adnl_port.to_string())
+                    .interact()?,
+            };
 
             // Update and save configs
             let adnl_node = NodeConfigAdnl::from_addr_and_keys(
@@ -530,6 +644,7 @@ async fn setup_adnl(
 fn setup_node_config_paths(
     theme: &dyn Theme,
     dirs: &ProjectDirs,
+    template: &Option<Template>,
     node_config: &mut NodeConfig,
 ) -> Result<()> {
     const DB_PATH_FALLBACK: &str = "node_db";
@@ -538,35 +653,54 @@ fn setup_node_config_paths(
     node_config.set_global_config_path(&dirs.global_config)?;
 
     // Check if internal db path was already configured
-    if let Some(db_path) = node_config.get_internal_db_path()? {
-        if db_path != PathBuf::from(DB_PATH_FALLBACK) {
+    let old_path = if let Some(db_path) = node_config.get_internal_db_path()? {
+        if template.is_none() && db_path != PathBuf::from(DB_PATH_FALLBACK) {
             dirs.store_node_config(node_config)?;
             return Ok(());
         }
-    }
+        db_path
+    } else {
+        Default::default()
+    };
 
     // Ask for the internal db path
-    let completion = &PathCompletion;
-    let path: String = Input::with_theme(theme)
-        .with_prompt("Specify node DB path")
-        .default(DEFAULT_NODE_DB_PATH.to_owned())
-        .completion_with(completion)
-        .validate_with(|input: &String| {
-            let path = PathBuf::from(input);
-            if path.is_absolute() {
-                Ok(())
-            } else {
-                Err("Node DB path must be an absolute")
-            }
-        })
-        .interact_text()?;
+    let path = match template {
+        Some(template) => template.general.node_db_path.clone(),
+        None => {
+            let completion = &PathCompletion;
+            Input::with_theme(theme)
+                .with_prompt("Specify node DB path")
+                .default(DEFAULT_NODE_DB_PATH.to_owned())
+                .completion_with(completion)
+                .validate_with(|input: &String| {
+                    let path = PathBuf::from(input);
+                    if path.is_absolute() {
+                        Ok(())
+                    } else {
+                        Err("Node DB path must be an absolute")
+                    }
+                })
+                .interact_text()?
+                .into()
+        }
+    };
 
     // Update and save node config
     node_config.set_internal_db_path(&path)?;
-    dirs.store_node_config(node_config)
+    dirs.store_node_config(node_config)?;
+
+    if template.is_some() && path != old_path {
+        println!("Node DB path updated");
+    }
+    Ok(())
 }
 
-async fn setup_binary(theme: &dyn Theme, dirs: &ProjectDirs, force: bool) -> Result<bool> {
+async fn setup_binary(
+    theme: &dyn Theme,
+    dirs: &ProjectDirs,
+    template: &Option<Template>,
+    force: bool,
+) -> Result<bool> {
     if !force && dirs.node_binary.exists() {
         // Do nothing if binary exists
         // TODO: print version and ask for update?
@@ -576,45 +710,63 @@ async fn setup_binary(theme: &dyn Theme, dirs: &ProjectDirs, force: bool) -> Res
     // Ensure that binaries directory exists
     dirs.prepare_binaries_dir()?;
 
-    // Ask for the node repo and features
-    let args: String = Input::with_theme(theme)
-        .with_prompt("Node repo URL and features")
-        .with_initial_text(DEFAULT_NODE_REPO)
-        .interact_text()?;
-
-    // Parse args:
-    // -b,--branch <branch>
-    // -f,--features <feature_name>+
-    let mut args = args.split(' ');
-    let repo = args.next().context("Url expected")?.parse::<Url>()?;
-
-    let mut branch = None;
-    let mut features = Vec::new();
-    'args: loop {
-        match args.next() {
-            Some("-b" | "--branch") => {
-                branch = Some(args.next().context("Expected branch name")?);
-            }
-            Some("-f" | "--features") => {
-                for feature in args.by_ref() {
-                    if feature.starts_with('-') {
-                        continue 'args;
-                    }
-                    features.push(feature);
-                }
-                anyhow::ensure!(!features.is_empty(), "Expected features list");
-            }
-            Some(name) => anyhow::bail!("Unknown argument: {name}"),
-            None => break,
+    let (repo, branch, features) = match template {
+        Some(template) => {
+            let node_repo = &template.general.node_repo;
+            (
+                node_repo.url.clone(),
+                node_repo.branch.clone(),
+                node_repo.features.clone(),
+            )
         }
-    }
+        None => {
+            // Ask for the node repo and features
+            let args: String = Input::with_theme(theme)
+                .with_prompt("Node repo URL and features")
+                .with_initial_text(DEFAULT_NODE_REPO)
+                .interact_text()?;
 
-    dirs.install_node_from_repo(&repo, branch, &features)
+            // Parse args:
+            // -b,--branch <branch>
+            // -f,--features <feature_name>+
+            let mut args = args.split(' ');
+            let repo = args.next().context("Url expected")?.parse::<Url>()?;
+
+            let mut branch = None;
+            let mut features = Vec::new();
+            'args: loop {
+                match args.next() {
+                    Some("-b" | "--branch") => {
+                        branch = Some(
+                            args.next()
+                                .map(ToOwned::to_owned)
+                                .context("Expected branch name")?,
+                        );
+                    }
+                    Some("-f" | "--features") => {
+                        for feature in args.by_ref() {
+                            if feature.starts_with('-') {
+                                continue 'args;
+                            }
+                            features.push(feature.to_owned());
+                        }
+                        anyhow::ensure!(!features.is_empty(), "Expected features list");
+                    }
+                    Some(name) => anyhow::bail!("Unknown argument: {name}"),
+                    None => break,
+                }
+            }
+
+            (repo, branch, features)
+        }
+    };
+
+    dirs.install_node_from_repo(&repo, &branch, &features)
         .await?;
     Ok(true)
 }
 
-async fn clone_repo<P: AsRef<Path>>(url: &Url, branch: Option<&str>, target: P) -> Result<()> {
+async fn clone_repo<P: AsRef<Path>>(url: &Url, branch: &Option<String>, target: P) -> Result<()> {
     // Remove old repo if it exists
     let target = target.as_ref();
     if target.exists() {
@@ -638,7 +790,7 @@ async fn clone_repo<P: AsRef<Path>>(url: &Url, branch: Option<&str>, target: P) 
         .context("failed to clone repo")
 }
 
-async fn build_node<P: AsRef<Path>>(target: P, features: &[&str]) -> Result<PathBuf> {
+async fn build_node<P: AsRef<Path>>(target: P, features: &[String]) -> Result<PathBuf> {
     let target = target.as_ref();
 
     let mut command = Command::new("cargo");
@@ -700,8 +852,8 @@ impl ProjectDirs {
     pub async fn install_node_from_repo(
         &self,
         repo: &Url,
-        branch: Option<&str>,
-        features: &[&str],
+        branch: &Option<String>,
+        features: &[String],
     ) -> Result<()> {
         // Create git cache directory if it doesn't exist
         let git_dir = &self.git_cache_dir;

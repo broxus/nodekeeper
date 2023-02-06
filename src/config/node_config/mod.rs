@@ -60,8 +60,8 @@ impl NodeConfig {
         self.get_field(Self::INTERNAL_DB_PATH)
     }
 
-    pub fn set_internal_db_path(&mut self, path: &str) -> Result<()> {
-        self.set_field(Self::INTERNAL_DB_PATH, path)
+    pub fn set_internal_db_path<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
+        self.set_field(Self::INTERNAL_DB_PATH, path.as_ref())
     }
 
     pub fn get_suggested_adnl_port(&self) -> Option<u16> {

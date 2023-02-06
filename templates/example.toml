@@ -1,0 +1,93 @@
+#### General settings
+[general]
+
+## REQUIRED:
+
+# Path to the root directory for the node DB.
+node_db_path = "/var/ever/db"
+
+## OPTIONAL:
+
+# Whether to create a root directory. Default: `true`.
+create_root_dir = true
+# Url or name of the global config. Default: `ever_mainnet`.
+global_config = "ever_mainnet"
+# Whether to reset node logger settings. Default: `false`.
+reset_logger_config = false
+# Whether to overwrite the existing node config. Default: `false`.
+reset_node_config = false
+# Whether to reset the existing app config. Default: `false`.
+reset_app_config = false
+# Repo url. Default: `https://github.com/tonlabs/ever-node`
+node_repo = "https://github.com/tonlabs/ever-node"
+
+## Alternative repo url:
+# [general.node_repo]
+# url = "https://github.com/tonlabs/ever-node"
+# branch = "signature_with_id"
+# features = ["signature_with_id"]
+
+
+#### Optional control server settings
+[control]
+# Control server TCP port. Default: `5031`.
+port = 5031
+# What to do with new node keys: `append` or `replace`. Default: `replace`.
+node_key_behavior = "replace"
+# On which address control server will be listening for requests. Default: `127.0.0.1`.
+listen_addr = "127.0.0.1"
+
+
+#### Optional ADNL settings
+[adnl]
+# ADNL UDP port. Default: `30100`.
+port = 30100
+# # Explicit public IP. Resolved by default.
+# public_ip = "123.123.123.123"
+
+
+#### Optional validator settings
+
+# # 1. Validate as single
+# [validator]
+
+# ## REQUIRED:
+
+# # Validator type
+# type = "single"
+# # Stake per round in nano EVERs
+# stake_per_round = "100000000000000"
+
+# ## OPTIONAL:
+
+# # Whether to overwrite existing validation config. Default: `false`.
+# overwrite = false
+# # Whether to overwrite existing validator keys. Default: `false`.
+# overwrite_validator_keys = false
+
+# 2. Validate as DePool
+[validator]
+
+## REQUIRED:
+
+# Validation type
+type = "depool"
+# DePool type: `default_v3`, `stever_v1` or `stever_v2`
+depool_type = "default_v3"
+# Minimal participant stake in nano EVERs
+min_stake = "10000000000"
+# Validator assurance in nano EVERs
+validator_assurance = "50000000000000"
+# Participant reward fraction, 1..=95
+participant_reward_fraction = 95
+
+## OPTIONAL:
+
+# Whether to overwrite existing validation config. Default: `false`.
+overwrite = false
+# Whether to overwrite existing validator keys. Default: `false`.
+overwrite_validator_keys = false
+# Whether to overwrite existing DePool keys. Default: `false`.
+overwrite_depool_keys = false
+# Strategy factory address for stEVER. Default: current mainnet factory.
+# strategy_factory = "0:519a1205bd021e5e0aa4b64f5ab689bc383efb4f94f283eac78926da71cfe100"
