@@ -1,0 +1,14 @@
+[general]
+node_db_path = "/var/ever/db"
+global_config = "ever_mainnet"
+node_repo = "https://github.com/tonlabs/ever-node"
+
+[adnl]
+port = 30100
+
+[validator]
+type = "depool"
+depool_type = "stever_v2"
+min_stake = "10000000000"              # 10 EVER
+validator_assurance = "50000000000000" # 50000 EVER
+participant_reward_fraction = 95

@@ -100,6 +100,28 @@ impl ProjectDirs {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Template {
+    /// General settings
+    general: TemplateGeneral,
+
+    /// Control server settings.
+    #[serde(default)]
+    control: TemplateControl,
+
+    /// ADNL settings.
+    #[serde(default)]
+    adnl: TemplateAdnl,
+
+    /// Optional validation params.
+    #[serde(default)]
+    validator: Option<TemplateValidator>,
+}
+
+fn default_global_config() -> Option<String> {
+    Some("ever_mainnet".to_owned())
+}
+
+#[derive(Deserialize, Serialize)]
+struct TemplateGeneral {
     /// Whether to create a root directory. Default: `true`.
     #[serde(default = "const_bool::<true>")]
     create_root_dir: bool,
@@ -128,22 +150,6 @@ pub struct Template {
     /// Node repository info.
     #[serde(default)]
     node_repo: TemplateNodeRepo,
-
-    /// Control server settings.
-    #[serde(default)]
-    control: TemplateControl,
-
-    /// ADNL settings.
-    #[serde(default)]
-    adnl: TemplateAdnl,
-
-    /// Optional validation params.
-    #[serde(default)]
-    validator: Option<TemplateValidator>,
-}
-
-fn default_global_config() -> Option<String> {
-    Some("ever_mainnet".to_owned())
 }
 
 #[derive(Deserialize, Serialize)]

@@ -105,7 +105,7 @@ fn prepare_root_dir(
     }
 
     let create_root_dir = match template {
-        Some(template) => template.create_root_dir,
+        Some(template) => template.general.create_root_dir,
         None => confirm(
             theme,
             root.is_absolute(),
@@ -144,12 +144,12 @@ async fn load_global_config(
         }
     }
 
-    let overwrite_config = matches!(template, Some(t) if t.global_config.is_some());
+    let overwrite_config = matches!(template, Some(t) if t.general.global_config.is_some());
 
     let global_config = &dirs.global_config;
     if !global_config.exists() || overwrite_config {
         let data = match template {
-            Some(template) => match template.global_config.as_deref() {
+            Some(template) => match template.general.global_config.as_deref() {
                 None | Some("ever_mainnet") => Cow::Borrowed(GlobalConfig::MAINNET),
                 Some("ever_testnet") => Cow::Borrowed(GlobalConfig::MAINNET),
                 Some(url) => {
@@ -196,12 +196,12 @@ async fn load_global_config(
 fn load_node_config(dirs: &ProjectDirs, template: &Option<Template>) -> Result<NodeConfig> {
     // Generate default log config if it doesn't exist
     let node_log_config = &dirs.node_log_config;
-    if !node_log_config.exists() || matches!(template, Some(t) if t.reset_logger_config) {
+    if !node_log_config.exists() || matches!(template, Some(t) if t.general.reset_logger_config) {
         dirs.store_node_log_config(&NodeLogConfig::generate())?;
     }
 
     let node_config = &dirs.node_config;
-    if !node_config.exists() || matches!(template, Some(t) if t.reset_node_config) {
+    if !node_config.exists() || matches!(template, Some(t) if t.general.reset_node_config) {
         // Generate and save default node config
         let node_config = NodeConfig::generate()?;
         dirs.store_node_config(&node_config)?;
@@ -214,7 +214,7 @@ fn load_node_config(dirs: &ProjectDirs, template: &Option<Template>) -> Result<N
 
 fn load_app_config(dirs: &ProjectDirs, template: &Option<Template>) -> Result<AppConfig> {
     let app_config = &dirs.app_config;
-    if !app_config.exists() || matches!(template, Some(t) if t.reset_app_config) {
+    if !app_config.exists() || matches!(template, Some(t) if t.general.reset_app_config) {
         // Generate and save default app config
         let app_config = AppConfig::default();
         dirs.store_app_config(&app_config)?;
@@ -626,7 +626,7 @@ fn setup_node_config_paths(
 
     // Ask for the internal db path
     let path = match template {
-        Some(template) => template.node_db_path.clone(),
+        Some(template) => template.general.node_db_path.clone(),
         None => {
             let completion = &PathCompletion;
             Input::with_theme(theme)
@@ -668,7 +668,7 @@ async fn setup_binary(
 
     let (repo, branch, features) = match template {
         Some(template) => {
-            let node_repo = &template.node_repo;
+            let node_repo = &template.general.node_repo;
             (
                 node_repo.url.clone(),
                 node_repo.branch.clone(),

@@ -128,7 +128,15 @@ fn prepare_single_validator(
 
     // Configure stake per round
     let stake_per_round = match template {
-        Some(template) => template.stake_per_round,
+        Some(template) => {
+            let stake = template.stake_per_round;
+            if stake > MAX_STAKE {
+                anyhow::bail!("Too big stake (max stake is {} EVER)", Ever(MAX_STAKE));
+            } else if stake < MIN_STAKE {
+                anyhow::bail!("Too small stake (min stake is {} EVER)", Ever(MIN_STAKE));
+            }
+            stake
+        }
         None => Input::with_theme(theme)
             .with_prompt("Stake per round (EVER)")
             .validate_with(|stake: &u64| match stake.saturating_mul(ONE_EVER as u64) {
@@ -321,7 +329,14 @@ fn prepare_new_depool(
 
     // Configure min participants stake
     let min_stake = match template {
-        Some(template) => template.deploy.min_stake,
+        Some(template) => {
+            let stake = template.deploy.min_stake;
+            anyhow::ensure!(
+                stake >= 10 * ONE_EVER as u64,
+                "Minimum stake is too small (< 10 EVER)"
+            );
+            stake
+        }
         None => Input::with_theme(theme)
             .with_prompt("Minimum participant stake (EVER)")
             .default(DEFAULT_MIN_STAKE)
@@ -335,7 +350,18 @@ fn prepare_new_depool(
 
     // Configure validator assurance
     let validator_assurance = match template {
-        Some(template) => template.deploy.validator_assurance,
+        Some(template) => {
+            let assurance = template.deploy.validator_assurance;
+            anyhow::ensure!(
+                assurance >= 10 * ONE_EVER as u64,
+                "Too small validator assurance (< 10 EVER)"
+            );
+            anyhow::ensure!(
+                assurance >= min_stake,
+                "Validator assurance is less than minimum stake"
+            );
+            assurance
+        }
         None => Input::with_theme(theme)
             .with_prompt("Validator assurance (EVER)")
             .default(DEFAULT_VALIDATOR_ASSURANCE)
@@ -352,7 +378,12 @@ fn prepare_new_depool(
 
     // Configure participant reward fraction
     let participant_reward_fraction = match template {
-        Some(template) => template.deploy.participant_reward_fraction,
+        Some(template) => {
+            let frac = template.deploy.participant_reward_fraction;
+            anyhow::ensure!(frac > 0, "Too small fraction (< 1%)");
+            anyhow::ensure!(frac < 100, "Too big fraction (> 99%)");
+            frac
+        }
         None => Input::with_theme(theme)
             .with_prompt("Participant reward fraction (%, 1..99)")
             .default(DEFAULT_PARTICIPANT_REWARD_FRACTION)
