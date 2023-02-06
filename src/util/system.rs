@@ -6,10 +6,6 @@ use std::ptr;
 
 use anyhow::{Context, Result};
 
-pub fn is_root() -> bool {
-    user_id() == 0
-}
-
 pub fn get_sudo_uid() -> Result<Option<u32>> {
     match std::env::var("SUDO_UID") {
         Ok(uid) => Ok(Some(uid.parse().context("invalid SUDO_UID")?)),

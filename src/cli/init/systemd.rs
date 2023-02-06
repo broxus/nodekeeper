@@ -15,16 +15,30 @@ use crate::util::*;
 #[derive(FromArgs)]
 /// Creates systemd services
 #[argh(subcommand, name = "systemd")]
-pub struct Cmd {}
+pub struct Cmd {
+    /// which user to use for systemd services.
+    #[argh(option)]
+    user: Option<String>,
+    /// whether to enable services for auto-start.
+    #[argh(switch)]
+    enable: Option<bool>,
+    /// whether to immediately start services.
+    #[argh(switch)]
+    start: Option<bool>,
+}
 
 impl Cmd {
     pub async fn run(self, theme: &dyn Theme, ctx: &CliContext) -> Result<()> {
+        if self.user.is_none() && !console::user_attended() {
+            anyhow::bail!("`user` param is required when running without tty");
+        }
+
         let dirs = ctx.dirs();
         let mut steps = Steps::new(2);
 
         // Ensure all services are created
         steps.next("Preparing services");
-        prepare_services(theme, dirs)?;
+        prepare_services(theme, dirs, &self.user)?;
 
         // Reload sysetmd
         steps.next("Reloading systemd configs");
@@ -32,51 +46,60 @@ impl Cmd {
 
         // Optionally start services
         steps.next("Systemd services are configured now. Great!");
-        start_services(theme).await?;
+        start_services(theme, self.enable, self.start).await?;
 
         Ok(())
     }
 }
 
-pub fn prepare_services(theme: &dyn Theme, dirs: &ProjectDirs) -> Result<()> {
+pub fn prepare_services(
+    theme: &dyn Theme,
+    dirs: &ProjectDirs,
+    user: &Option<String>,
+) -> Result<()> {
     const ROOT_USER: &str = "root";
 
-    // Determine current user id
-    let uid = system::user_id();
-    // Determine "real" user id (if he runs this app under sudo)
-    let other_user = match uid {
-        // If current user is root
-        0 => match system::get_sudo_uid()? {
-            // Root user is running this app under sudo
-            Some(0) => None,
-            // All other cases (no sudo or real user id)
-            uid => uid,
-        },
-        // Current user is not root
-        uid => Some(uid),
-    };
+    let user = match user {
+        Some(user) => Cow::Borrowed(user.as_str()),
+        None => {
+            // Determine current user id
+            let uid = system::user_id();
+            // Determine "real" user id (if he runs this app under sudo)
+            let other_user = match uid {
+                // If current user is root
+                0 => match system::get_sudo_uid()? {
+                    // Root user is running this app under sudo
+                    Some(0) => None,
+                    // All other cases (no sudo or real user id)
+                    uid => uid,
+                },
+                // Current user is not root
+                uid => Some(uid),
+            };
 
-    let user = if let Some(uid) = other_user {
-        // If there is an option of running services under non-root user,
-        // ask user about it
-        let other_user = system::user_name(uid).context("failed to get user name")?;
-        match Select::with_theme(theme)
-            .with_prompt("Select the user from which the service will work")
-            .item(&other_user)
-            .item("root")
-            .default(0)
-            .interact()?
-        {
-            // Running as non-root user
-            0 => Cow::Owned(other_user),
-            // Running as root
-            _ => Cow::Borrowed(ROOT_USER),
+            if let Some(uid) = other_user {
+                // If there is an option of running services under non-root user,
+                // ask user about it
+                let other_user = system::user_name(uid).context("failed to get user name")?;
+                match Select::with_theme(theme)
+                    .with_prompt("Select the user from which the service will work")
+                    .item(&other_user)
+                    .item("root")
+                    .default(0)
+                    .interact()?
+                {
+                    // Running as non-root user
+                    0 => Cow::Owned(other_user),
+                    // Running as root
+                    _ => Cow::Borrowed(ROOT_USER),
+                }
+            } else {
+                // No options available
+                system::user_name(uid)
+                    .map(Cow::Owned)
+                    .unwrap_or(Cow::Borrowed(ROOT_USER))
+            }
         }
-    } else {
-        // No options available
-        system::user_name(uid)
-            .map(Cow::Owned)
-            .unwrap_or(Cow::Borrowed(ROOT_USER))
     };
 
     let print_service = |path: &Path| {
@@ -97,15 +120,24 @@ pub fn prepare_services(theme: &dyn Theme, dirs: &ProjectDirs) -> Result<()> {
     Ok(())
 }
 
-pub async fn start_services(theme: &dyn Theme) -> Result<()> {
+pub async fn start_services(
+    theme: &dyn Theme,
+    enable: Option<bool>,
+    start: Option<bool>,
+) -> Result<()> {
     let services = [VALIDATOR_SERVICE, VALIDATOR_MANAGER_SERVICE];
-    systemd_set_sercices_enabled(
-        services,
-        confirm(theme, true, "Enable autostart services at system startup?")?,
-    )
-    .await?;
 
-    if confirm(theme, true, "Restart systemd services?")? {
+    let enabled = match enable {
+        Some(enable) => enable,
+        None => confirm(theme, true, "Enable autostart services at system startup?")?,
+    };
+    systemd_set_services_enabled(services, enabled).await?;
+
+    let start = match start {
+        Some(start) => start,
+        None => confirm(theme, true, "Restart systemd services?")?,
+    };
+    if start {
         for service in services {
             systemd_restart_service(service).await?;
         }
@@ -203,7 +235,7 @@ async fn systemd_restart_service(service: &str) -> Result<()> {
     .with_context(|| format!("failed to restart service {service}"))
 }
 
-async fn systemd_set_sercices_enabled<'a, I: IntoIterator<Item = &'a str>>(
+async fn systemd_set_services_enabled<'a, I: IntoIterator<Item = &'a str>>(
     services: I,
     enabled: bool,
 ) -> Result<()> {
