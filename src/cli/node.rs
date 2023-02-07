@@ -20,11 +20,9 @@ pub struct Cmd {
 
 impl Cmd {
     pub async fn run(self, ctx: CliContext) -> Result<()> {
-        let config = ctx.load_config()?;
-        let rpc_node = NodeTcpRpc::new(config.control()?).await?;
-
         let response = match self.subcommand {
             SubCmd::GenKey(_) => {
+                let rpc_node = ctx.create_rpc_node().await?;
                 let hey_hash = rpc_node.generate_key_pair().await?;
                 serde_json::json!({
                     "key_hash": hex::encode(hey_hash),
@@ -32,6 +30,8 @@ impl Cmd {
             }
             SubCmd::ExportPubKey(cmd) => {
                 let key_hash = parse_key_hash(&cmd.key_hash)?;
+
+                let rpc_node = ctx.create_rpc_node().await?;
                 let public = rpc_node.export_public_key(&key_hash).await?;
                 serde_json::json!({
                     "public": hex::encode(public.as_bytes())
@@ -41,6 +41,8 @@ impl Cmd {
                 let key_hash = parse_key_hash(&cmd.key_hash)?;
                 let data = parse_optional_input(cmd.data, false)?;
                 let data = ton_abi::extend_signature_with_id(&data, cmd.signature_id);
+
+                let rpc_node = ctx.create_rpc_node().await?;
                 let signature = rpc_node.sign(&key_hash, &data).await?;
                 serde_json::json!({
                     "signature": base64::encode(signature),
@@ -48,6 +50,8 @@ impl Cmd {
             }
             SubCmd::AddPermKey(cmd) => {
                 let key_hash = parse_key_hash(&cmd.key_hash)?;
+
+                let rpc_node = ctx.create_rpc_node().await?;
                 rpc_node
                     .add_validator_permanent_key(&key_hash, cmd.election_id, cmd.ttl)
                     .await?;
@@ -56,16 +60,20 @@ impl Cmd {
             SubCmd::AddValidatorAddr(cmd) => {
                 let permanent_key_hash = parse_key_hash(&cmd.permanent_key_hash)?;
                 let key_hash = parse_key_hash(&cmd.key_hash)?;
+
+                let rpc_node = ctx.create_rpc_node().await?;
                 rpc_node
                     .add_validator_adnl_address(&permanent_key_hash, &key_hash, cmd.ttl)
                     .await?;
                 serde_json::json!({})
             }
             SubCmd::GetStats(_) => {
+                let rpc_node = ctx.create_rpc_node().await?;
                 let stats = rpc_node.get_stats().await?;
                 serde_json::to_value(stats)?
             }
             SubCmd::SetStatesGcInterval(cmd) => {
+                let rpc_node = ctx.create_rpc_node().await?;
                 rpc_node.set_states_gc_interval(cmd.interval).await?;
                 serde_json::json!({})
             }
@@ -77,6 +85,7 @@ impl Cmd {
                     config: String,
                 }
 
+                let rpc_node = ctx.create_rpc_node().await?;
                 let ConfigWithId { block_id, config } = rpc_node.get_config_all().await?;
                 serde_json::to_value(Response {
                     block_id,
@@ -91,6 +100,7 @@ impl Cmd {
                     value: serde_json::Value,
                 }
 
+                let rpc_node = ctx.create_rpc_node().await?;
                 let ConfigParamWithId { block_id, param } =
                     rpc_node.get_config_param(cmd.param).await?;
                 let param = serde_json::from_str::<serde_json::Value>(&param)?;
@@ -106,6 +116,8 @@ impl Cmd {
             }
             SubCmd::GetAccount(cmd) => {
                 let address = parse_address(&cmd.address)?;
+
+                let rpc_node = ctx.create_rpc_node().await?;
                 let param = rpc_node.get_shard_account_state(&address).await?;
                 serde_json::json!({
                     "state": base64::encode(ton_types::serialize_toc(&param.serialize()?)?)
@@ -113,6 +125,8 @@ impl Cmd {
             }
             SubCmd::SendMessage(cmd) => {
                 let data = parse_optional_input(cmd.data, false)?;
+
+                let rpc_node = ctx.create_rpc_node().await?;
                 rpc_node.send_message(&data).await?;
                 serde_json::json!({})
             }
@@ -326,4 +340,11 @@ struct CmdNodeGenDht {
     /// explicit time
     #[argh(option)]
     time: Option<u32>,
+}
+
+impl CliContext {
+    async fn create_rpc_node(self) -> Result<NodeTcpRpc> {
+        let config = self.load_config()?;
+        NodeTcpRpc::new(config.control()?).await
+    }
 }
