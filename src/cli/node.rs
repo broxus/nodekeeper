@@ -1,9 +1,12 @@
-use anyhow::Result;
+use std::net::Ipv4Addr;
+
+use anyhow::{Context, Result};
 use argh::FromArgs;
 use serde::Serialize;
 use ton_block::Serializable;
 
 use super::CliContext;
+use crate::config::NodeConfig;
 use crate::network::{ConfigParamWithId, ConfigWithId, NodeTcpRpc};
 use crate::util::*;
 
@@ -113,6 +116,68 @@ impl Cmd {
                 rpc_node.send_message(&data).await?;
                 serde_json::json!({})
             }
+            SubCmd::GenDht(cmd) => {
+                use everscale_crypto::ed25519;
+                use everscale_network::proto;
+
+                let now = cmd.time.unwrap_or_else(broxus_util::now);
+
+                let node_config = NodeConfig::load(&ctx.dirs.node_config)?;
+                let adnl = node_config
+                    .get_adnl_node()
+                    .context("failed to load ADNL node info")?
+                    .context("ADNL node info not found")?;
+
+                let mut address = adnl.ip_address;
+                if let Some(ip) = cmd.ip {
+                    address.set_ip(ip);
+                }
+                if let Some(port) = cmd.port {
+                    address.set_port(port);
+                }
+
+                let dht_key = adnl.dht_key().context("DHT key not found")?;
+                let public_key = ed25519::PublicKey::from(dht_key);
+
+                let signature = dht_key.expand().sign(
+                    proto::dht::Node {
+                        id: public_key.as_tl(),
+                        addr_list: proto::adnl::AddressList {
+                            address: Some(proto::adnl::Address::from(&address)),
+                            version: now,
+                            reinit_date: now,
+                            expire_at: 0,
+                        },
+                        version: now,
+                        signature: &[],
+                    },
+                    &public_key,
+                );
+
+                serde_json::json!({
+                    "@type": "dht.node",
+                    "id": {
+                        "@type": "pub.ed25519",
+                        "key": base64::encode(public_key.as_bytes())
+                    },
+                    "addr_list": {
+                        "@type": "adnl.addressList",
+                        "addrs": [
+                            {
+                                "@type": "adnl.address.udp",
+                                "ip": u32::from(*address.ip()) as i32,
+                                "port": address.port()
+                            }
+                        ],
+                        "version": now,
+                        "reinit_date": now,
+                        "priority": 0i32,
+                        "expire_at": 0i32
+                    },
+                    "version": now,
+                    "signature": base64::encode(signature)
+                })
+            }
         };
 
         print_output(response);
@@ -134,6 +199,7 @@ enum SubCmd {
     GetConfigParam(CmdGetConfigParam),
     GetAccount(CmdGetAccount),
     SendMessage(CmdSendMessage),
+    GenDht(CmdNodeGenDht),
 }
 
 #[derive(FromArgs)]
@@ -245,4 +311,19 @@ struct CmdSendMessage {
     /// base64 encoded message data or empty for input from stdin
     #[argh(positional)]
     data: Option<String>,
+}
+
+#[derive(FromArgs)]
+/// Generates signed DHT entry for this node
+#[argh(subcommand, name = "gendht")]
+struct CmdNodeGenDht {
+    /// overwrite public IP
+    #[argh(option)]
+    ip: Option<Ipv4Addr>,
+    /// overwrite ADNL port
+    #[argh(option)]
+    port: Option<u16>,
+    /// explicit time
+    #[argh(option)]
+    time: Option<u32>,
 }

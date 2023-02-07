@@ -513,9 +513,6 @@ async fn setup_adnl(
     node_config: &mut NodeConfig,
     global_config: &GlobalConfig,
 ) -> Result<bool> {
-    const DHT_TAG: usize = 1;
-    const OVERLAY_TAG: usize = 2;
-
     // Compute default adnl port
     let adnl_port = node_config
         .get_suggested_adnl_port()

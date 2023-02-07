@@ -183,6 +183,10 @@ impl NodeConfigAdnl {
         ])
     }
 
+    pub fn dht_key(&self) -> Option<&ed25519::SecretKey> {
+        self.keys.get(&Self::DHT_TAG)
+    }
+
     pub fn overlay_pubkey(&self) -> Result<ed25519::PublicKey> {
         self.keys
             .get(&Self::OVERLAY_TAG)

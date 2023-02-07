@@ -9,6 +9,8 @@
 
 - Added `--user`,`--enable` and `--start` params to the `stever init systemd` to allow using it from scripts.
 
+- Added `stever node gendht` to export signed global config entries.
+
 ### Changed
 
 - Separate `stever init systemd` is now always required after the first initialization.
