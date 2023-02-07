@@ -3,6 +3,7 @@ use std::net::Ipv4Addr;
 use anyhow::{Context, Result};
 use argh::FromArgs;
 use serde::Serialize;
+use tl_proto::BoxedConstructor;
 use ton_block::Serializable;
 
 use super::CliContext;
@@ -164,7 +165,8 @@ impl Cmd {
                         },
                         version: now,
                         signature: &[],
-                    },
+                    }
+                    .as_boxed(),
                     &public_key,
                 );
 
