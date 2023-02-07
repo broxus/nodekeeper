@@ -1,5 +1,5 @@
 use std::net::SocketAddrV4;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -123,6 +123,11 @@ pub struct AppConfigValidatorSingle {
     pub stake_per_round: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stake_factor: Option<u32>,
+    #[serde(
+        default,
+        skip_serializing_if = "AppConfigValidatorSigner::is_empty_simple"
+    )]
+    pub signer: AppConfigValidatorSigner,
 }
 
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -149,6 +154,11 @@ pub struct AppConfigValidatorDePool {
     pub strategy: Option<ton_block::MsgAddressInt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deploy: Option<AppConfigDePoolDeploymentParams>,
+    #[serde(
+        default,
+        skip_serializing_if = "AppConfigValidatorSigner::is_empty_simple"
+    )]
+    pub signer: AppConfigValidatorSigner,
 }
 
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -180,4 +190,35 @@ impl DePoolType {
     pub fn is_stever(&self) -> bool {
         !self.is_default()
     }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum AppConfigValidatorSigner {
+    Simple {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key: Option<PathBuf>,
+    },
+    Multisig {
+        wallet_type: MultisigType,
+        custodians: Vec<PathBuf>,
+    },
+}
+
+impl Default for AppConfigValidatorSigner {
+    fn default() -> Self {
+        Self::Simple { key: None }
+    }
+}
+
+impl AppConfigValidatorSigner {
+    fn is_empty_simple(&self) -> bool {
+        matches!(self, Self::Simple { key: None })
+    }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub enum MultisigType {
+    #[serde(rename = "old_multisig")]
+    OldMultisig,
 }

@@ -194,9 +194,9 @@ impl ValidationManager {
             }
 
             // Prepare context
-            let keypair = self.dirs.load_validator_keys()?;
             let ctx = ElectionsContext {
                 subscription,
+                dirs: &self.dirs,
                 elector,
                 elector_data,
                 election_id,
@@ -206,8 +206,8 @@ impl ValidationManager {
 
             // Prepare election future
             let validation = match validator {
-                AppConfigValidator::Single(validation) => validation.elect(keypair, ctx).boxed(),
-                AppConfigValidator::DePool(validation) => validation.elect(keypair, ctx).boxed(),
+                AppConfigValidator::Single(validation) => validation.elect(ctx).boxed(),
+                AppConfigValidator::DePool(validation) => validation.elect(ctx).boxed(),
             };
 
             // Try elect
@@ -295,6 +295,7 @@ struct DeploymentContext<'a> {
 
 struct ElectionsContext<'a> {
     subscription: Arc<Subscription>,
+    dirs: &'a ProjectDirs,
     elector: elector::Elector,
     elector_data: elector::ElectorData,
     election_id: u32,
@@ -308,7 +309,7 @@ impl AppConfigValidatorSingle {
         Ok(())
     }
 
-    async fn elect(self, keypair: ed25519_dalek::Keypair, ctx: ElectionsContext<'_>) -> Result<()> {
+    async fn elect(self, ctx: ElectionsContext<'_>) -> Result<()> {
         tracing::info!(
             election_id = ctx.election_id,
             address = %self.address,
@@ -317,11 +318,8 @@ impl AppConfigValidatorSingle {
             "election as single"
         );
 
-        let wallet = Wallet::new(-1, keypair, ctx.subscription.clone());
-        anyhow::ensure!(
-            wallet.address() == &self.address,
-            "validator wallet address mismatch"
-        );
+        let signer = ctx.dirs.prepare_signer(self.signer)?;
+        let wallet = Wallet::new(self.address, signer, ctx.subscription.clone())?;
 
         if let Some(stake) = ctx.elector_data.has_unfrozen_stake(wallet.address()) {
             wallet.wait_for_balance(2 * ONE_EVER).await?;
@@ -387,6 +385,7 @@ impl AppConfigValidatorDePool {
         struct LazyWallet<'a> {
             state: Option<Wallet>,
             target: &'a ton_block::MsgAddressInt,
+            signer: &'a AppConfigValidatorSigner,
             ctx: DeploymentContext<'a>,
         }
 
@@ -395,12 +394,12 @@ impl AppConfigValidatorDePool {
                 match &mut self.state {
                     Some(wallet) => Ok(wallet),
                     state @ None => {
-                        let keypair = self.ctx.dirs.load_validator_keys()?;
-                        let res = Wallet::new(0, keypair, self.ctx.subscription.clone());
-                        anyhow::ensure!(
-                            res.address() == self.target,
-                            "validator wallet address mismatch"
-                        );
+                        let signer = self.ctx.dirs.prepare_signer(self.signer.clone())?;
+                        let res = Wallet::new(
+                            self.target.clone(),
+                            signer,
+                            self.ctx.subscription.clone(),
+                        )?;
                         Ok(state.get_or_insert(res))
                     }
                 }
@@ -410,6 +409,7 @@ impl AppConfigValidatorDePool {
         let mut wallet = LazyWallet {
             state: None,
             target: &self.owner,
+            signer: &self.signer,
             ctx,
         };
 
@@ -568,7 +568,7 @@ impl AppConfigValidatorDePool {
         Ok(())
     }
 
-    async fn elect(self, keypair: ed25519_dalek::Keypair, ctx: ElectionsContext<'_>) -> Result<()> {
+    async fn elect(self, ctx: ElectionsContext<'_>) -> Result<()> {
         tracing::info!(
             election_id = ctx.election_id,
             depool = %self.depool,
@@ -578,11 +578,8 @@ impl AppConfigValidatorDePool {
             "election as DePool"
         );
 
-        let wallet = Wallet::new(0, keypair, ctx.subscription.clone());
-        anyhow::ensure!(
-            wallet.address() == &self.owner,
-            "validator wallet address mismatch"
-        );
+        let signer = ctx.dirs.prepare_signer(self.signer.clone())?;
+        let wallet = Wallet::new(self.owner.clone(), signer, ctx.subscription.clone())?;
 
         let depool = DePool::new(
             self.depool_type,
@@ -897,10 +894,30 @@ impl Wallet {
 }
 
 impl ProjectDirs {
-    fn load_validator_keys(&self) -> Result<ed25519_dalek::Keypair> {
-        let keys = StoredKeys::load(&self.validator_keys)
-            .context("failed to load validator wallet keys")?;
-        Ok(keys.as_keypair())
+    fn prepare_signer(&self, signer: AppConfigValidatorSigner) -> Result<wallet::Signer> {
+        match signer {
+            AppConfigValidatorSigner::Simple { key } => {
+                let keys = StoredKeys::load(key.as_ref().unwrap_or(&self.validator_keys))
+                    .context("failed to load validator wallet keys")?;
+                Ok(wallet::Signer::Simple {
+                    keypair: keys.as_keypair(),
+                })
+            }
+            AppConfigValidatorSigner::Multisig {
+                wallet_type,
+                custodians: paths,
+            } => {
+                let mut custodians = Vec::with_capacity(paths.len());
+                for path in paths {
+                    let keys = StoredKeys::load(path).context("failed to load custodian keys")?;
+                    custodians.push(keys.as_keypair());
+                }
+                Ok(wallet::Signer::Multisig {
+                    wallet_type,
+                    custodians,
+                })
+            }
+        }
     }
 
     fn load_depool_keys(&self) -> Result<ed25519_dalek::Keypair> {
