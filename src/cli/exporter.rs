@@ -7,9 +7,8 @@ use argh::FromArgs;
 
 use super::CliContext;
 use crate::exporter::{
-    Exporter, ExporterTarget, FileExporterTarget, HttpExporterTarget, Metrics, StdoutExporterTarget,
+    Exporter, ExporterTarget, FileExporterTarget, HttpExporterTarget, StdoutExporterTarget,
 };
-use crate::network::NodeTcpRpc;
 
 #[derive(FromArgs)]
 /// Prometheus metrics exporter
@@ -34,38 +33,34 @@ pub struct Cmd {
 
 impl Cmd {
     pub async fn run(self, ctx: CliContext) -> Result<()> {
-        let config = ctx.load_config()?;
-        let node_rpc = NodeTcpRpc::new(config.control()?).await?;
+        let mut targets = Vec::<Box<dyn ExporterTarget>>::new();
 
-        if !self.once {
-            let mut targets = Vec::<Box<dyn ExporterTarget>>::new();
-            if let Some(file) = self.file {
-                targets.push(Box::new(FileExporterTarget::new(file)));
-            }
-            if let Some(addr) = self.addr {
-                targets.push(Box::new(HttpExporterTarget::new(addr).await?));
-            }
-            if targets.is_empty() {
-                targets.push(Box::new(StdoutExporterTarget));
-            }
-
-            let interval = Duration::from_secs(self.interval as u64);
-            Exporter::new(node_rpc, interval, targets).serve().await;
-            return Ok(());
+        // Add file exporter if path specified
+        if let Some(file) = self.file {
+            targets.push(Box::new(FileExporterTarget::new(file)));
         }
 
-        let exporter: Box<dyn ExporterTarget> = match (self.file, self.addr) {
-            (None, None) => Box::new(StdoutExporterTarget),
-            (_, Some(_)) => return Err(ExporterError::OnceNotSupported.into()),
-            (Some(file), _) => Box::new(FileExporterTarget::new(file)),
-        };
+        // Add network exporter
+        if let Some(addr) = self.addr {
+            if self.once {
+                return Err(ExporterError::OnceNotSupported.into());
+            }
+            targets.push(Box::new(HttpExporterTarget::new(addr).await?));
+        }
 
-        let stats = node_rpc.get_stats().await?;
-        let metrics = Metrics {
-            collected_at: broxus_util::now(),
-            stats: &stats,
-        };
-        exporter.write(&metrics)
+        // Fallback to stdout exporter
+        if targets.is_empty() {
+            targets.push(Box::new(StdoutExporterTarget));
+        }
+
+        let exporter = Exporter::new(ctx.dirs, targets);
+        if self.once {
+            exporter.once().await
+        } else {
+            let interval = Duration::from_secs(self.interval as u64);
+            exporter.serve(interval).await;
+            Ok(())
+        }
     }
 }
 

@@ -20,7 +20,7 @@ const DEFAULT_LOCAL_ADNL_PORT: u16 = 0;
 const DEFAULT_ADNL_PORT: u16 = 30100;
 
 pub const DEFAULT_NODE_DB_PATH: &str = "/var/ever/rnode";
-pub const DEFAULT_NODE_REPO: &str = "https://github.com/tonlabs/ton-labs-node.git";
+pub const DEFAULT_NODE_REPO: &str = "https://github.com/tonlabs/ever-node.git";
 
 #[derive(FromArgs)]
 /// Prepares configs and binaries
@@ -858,7 +858,7 @@ impl ProjectDirs {
             std::fs::create_dir_all(git_dir).context("failed to create git cache directory")?;
         }
 
-        let repo_dir = git_dir.join("ton-labs-node");
+        let repo_dir = git_dir.join("ever-node");
 
         // Clone repo
         clone_repo(repo, branch, &repo_dir).await?;
