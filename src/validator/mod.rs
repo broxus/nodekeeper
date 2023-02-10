@@ -163,7 +163,7 @@ impl ValidationManager {
             };
 
             // Participate in elections
-            let elector = elector::Elector::new(elector_address, subscription.clone());
+            let elector = Elector::new(elector_address, subscription.clone());
             let elector_data = elector
                 .get_data()
                 .await
@@ -295,7 +295,7 @@ struct DeploymentContext<'a> {
 
 struct ElectionsContext<'a> {
     subscription: Arc<Subscription>,
-    elector: elector::Elector,
+    elector: Elector,
     elector_data: elector::ElectorData,
     election_id: u32,
     timings: ton_block::ConfigParam15,
@@ -394,7 +394,7 @@ impl AppConfigValidatorDePool {
             fn get_or_init(&'_ mut self) -> Result<&'_ Wallet> {
                 match &mut self.state {
                     Some(wallet) => Ok(wallet),
-                    state @ None => {
+                    state => {
                         let keypair = self.ctx.dirs.load_validator_keys()?;
                         let res = Wallet::new(0, keypair, self.ctx.subscription.clone());
                         anyhow::ensure!(
@@ -502,7 +502,7 @@ impl AppConfigValidatorDePool {
 
                 let subscription = ctx.subscription.clone();
                 let strategy = if let Some(address) = self.strategy.clone() {
-                    let strategy = strategy::Strategy::new(address, subscription);
+                    let strategy = Strategy::new(address, subscription);
                     let details = strategy
                         .get_details()
                         .await
@@ -515,7 +515,7 @@ impl AppConfigValidatorDePool {
 
                     Some(strategy.address)
                 } else if let Some(address) = self.strategy_factory.clone() {
-                    let factory = strategy_factory::StrategyFactory::new(address, subscription);
+                    let factory = StrategyFactory::new(address, subscription);
                     factory
                         .get_details()
                         .await
@@ -537,7 +537,7 @@ impl AppConfigValidatorDePool {
                     let strategy = wallet
                         .call(deployment_message)
                         .await
-                        .and_then(strategy_factory::StrategyFactory::extract_strategy_address)
+                        .and_then(StrategyFactory::extract_strategy_address)
                         .context("failed to deploy stEVER DePool strategy")?;
                     tracing::info!(%strategy, "successfully deployed stEVER strategy");
 
@@ -869,7 +869,7 @@ impl Timeline {
 
 impl Wallet {
     async fn wait_for_balance(&self, target: u128) -> Result<u128> {
-        let interval = std::time::Duration::from_secs(1);
+        let interval = Duration::from_secs(1);
         let mut last_balance = None;
         loop {
             match self.get_balance().await?.unwrap_or_default() {

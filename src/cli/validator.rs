@@ -93,7 +93,7 @@ impl Cmd {
             let mut interval = self.min_retry_interval;
             loop {
                 if let Err(e) = manager.try_validate().await {
-                    tracing::error!("error ocurred: {e:?}");
+                    tracing::error!("error occurred: {e:?}");
                 }
 
                 tracing::info!("retrying in {interval} seconds");
