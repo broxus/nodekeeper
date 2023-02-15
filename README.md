@@ -194,7 +194,7 @@ Commands:
 
 ## How it works
 
-This tool is a replacement of `ton-labs-node-tools` and contains all the necessary functionality to manage a node.
+This tool is a replacement of `ever-node-tools` and contains all the necessary functionality to manage a node.
 During initialization steps it prepares configs (at `$HOME/.stever` by default), downloads and builds the node,
 and deploys necessery contracts (all this through a cli with convenient choices!).
 

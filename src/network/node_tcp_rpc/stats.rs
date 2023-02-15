@@ -11,20 +11,21 @@ use crate::util::serde_block_id;
 #[serde(rename_all = "snake_case", tag = "state")]
 pub enum NodeStats {
     Running(RunningStats),
-    NotReady,
+    NotReady(SyncStatus),
 }
 
 impl NodeStats {
     pub fn try_into_running(self) -> Result<RunningStats, StatsError> {
         match self {
             Self::Running(stats) => Ok(stats),
-            Self::NotReady => Err(StatsError::NotReady),
+            Self::NotReady(_) => Err(StatsError::NotReady),
         }
     }
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct RunningStats {
+    pub sync_status: SyncStatus,
     pub node_version: NodeVersion,
     #[serde(with = "serde_hex_array")]
     pub overlay_adnl_id: [u8; 32],
@@ -139,8 +140,9 @@ impl TryFrom<proto::Stats> for NodeStats {
             }
         }
 
-        if !matches!(sync_status, Some(SyncStatus::SynchronizationFinished)) {
-            return Ok(Self::NotReady);
+        let sync_status = sync_status.unwrap_or(SyncStatus::NoSetStatus);
+        if sync_status != SyncStatus::SynchronizationFinished {
+            return Ok(Self::NotReady(sync_status));
         }
 
         match (
@@ -172,6 +174,7 @@ impl TryFrom<proto::Stats> for NodeStats {
                 };
 
                 Ok(Self::Running(RunningStats {
+                    sync_status,
                     node_version,
                     overlay_adnl_id,
                     mc_time,
@@ -230,7 +233,7 @@ impl Serialize for ValidatorSetEntry {
     }
 }
 
-#[derive(Copy, Clone, Debug, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SyncStatus {
     StartBoot,
@@ -242,6 +245,12 @@ pub enum SyncStatus {
     CheckingDb,
     DbBroken,
     NoSetStatus,
+}
+
+impl std::fmt::Display for SyncStatus {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        std::fmt::Debug::fmt(self, f)
+    }
 }
 
 #[derive(thiserror::Error, Debug)]

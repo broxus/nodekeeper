@@ -172,23 +172,19 @@ fn prepare_single_validator(
 
     println!(
         "\n{}\n{}\n\n{} {}{}\n\n{}\n{}",
-        console::style("Validator wallet address:").green().bold(),
-        console::style(wallet_address).bold(),
-        console::style("Required validator wallet balance:")
-            .green()
-            .bold(),
-        console::style(format!("{} EVER", Ever(target_balance))).bold(),
-        console::style(format!(
+        style("Validator wallet address:").green().bold(),
+        style(wallet_address).bold(),
+        style("Required validator wallet balance:").green().bold(),
+        style(format!("{} EVER", Ever(target_balance))).bold(),
+        style(format!(
             "\n  • {} EVER, maintenance balance\
              \n  • 2 x {} EVER, stakes for each round",
             Ever(Wallet::INITIAL_BALANCE),
             Ever(target_balance)
         ))
         .dim(),
-        console::style("Make sure you back up your keys:")
-            .yellow()
-            .bold(),
-        console::style(dirs.validator_keys.display()).bold()
+        style("Make sure you back up your keys:").yellow().bold(),
+        style(dirs.validator_keys.display()).bold()
     );
 
     Ok(())
@@ -263,11 +259,9 @@ fn prepare_depool_validator(
 
     println!(
         "\n{}\n{}\n{}",
-        console::style("Make sure you back up your keys:")
-            .yellow()
-            .bold(),
-        console::style(dirs.validator_keys.display()).bold(),
-        console::style(dirs.depool_keys.display()).bold(),
+        style("Make sure you back up your keys:").yellow().bold(),
+        style(dirs.validator_keys.display()).bold(),
+        style(dirs.depool_keys.display()).bold(),
     );
 
     Ok(())
