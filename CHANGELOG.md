@@ -1,3 +1,28 @@
+# 0.1.4 (2023-02-15)
+
+### Added
+
+- Extended exported metrics.
+    * Added `sync_status` label to the `node_ready` metric.
+    * `validation_enabled`: `0`/`1`.
+    * <sub>if validation is enabled</sub>
+
+      `validator_type`: `0` - single / `1` - depool.
+    * <sub>if validation is enabled and `validator_type=0`</sub>
+
+      `validator_single_stake_per_round`: stake in nano EVERs.
+
+      Labels: `validator` - validator wallet address.
+    * <sub>if validation is enabled and `validator_type=1`</sub> 
+
+      `validator_depool_type`: `0` - default_v3, `1` - stever_v1, `2` - stever_v2.
+      
+      Labels: `validator` - validator wallet address, `depool` - depool address.
+
+### Changed
+
+- Refactored project structure.
+
 # 0.1.3 (2023-02-06)
 
 ### Added
