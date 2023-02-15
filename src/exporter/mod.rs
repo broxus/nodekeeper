@@ -124,6 +124,7 @@ struct Metrics<'a> {
 impl std::fmt::Display for Metrics<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         const NODE_READY: &str = "node_ready";
+        const SYNC_STATUS: &str = "sync_status";
 
         f.begin_metric(CONFIG_IS_VALID).value(1)?;
         f.begin_metric(EXPORTER_READY).value(1)?;
@@ -131,19 +132,38 @@ impl std::fmt::Display for Metrics<'_> {
         f.begin_metric("collected_at").value(self.collected_at)?;
 
         let stats = match self.stats {
-            NodeStats::NotReady => return f.begin_metric(NODE_READY).value(0),
+            NodeStats::NotReady(sync_status) => {
+                return f
+                    .begin_metric(NODE_READY)
+                    .label(SYNC_STATUS, sync_status)
+                    .value(0)
+            }
             NodeStats::Running(stats) => {
-                f.begin_metric(NODE_READY).value(1)?;
+                f.begin_metric(NODE_READY)
+                    .label(SYNC_STATUS, stats.sync_status)
+                    .value(1)?;
                 stats
             }
         };
 
+        let node_version = &stats.node_version;
+
+        f.begin_metric("node_version")
+            .label(
+                "version",
+                format!(
+                    "{}.{}.{}",
+                    node_version.major, node_version.minor, node_version.patch
+                ),
+            )
+            .value(0)?;
+
         f.begin_metric("node_version_major")
-            .value(stats.node_version.major)?;
+            .value(node_version.major)?;
         f.begin_metric("node_version_minor")
-            .value(stats.node_version.minor)?;
+            .value(node_version.minor)?;
         f.begin_metric("node_version_patch")
-            .value(stats.node_version.patch)?;
+            .value(node_version.patch)?;
 
         f.begin_metric("mc_seqno")
             .value(stats.last_mc_block.seq_no)?;

@@ -261,8 +261,8 @@ impl ValidationManager {
                         break Ok(true);
                     }
                 }
-                NodeStats::NotReady => {
-                    tracing::trace!("node not synced");
+                NodeStats::NotReady(sync_status) => {
+                    tracing::trace!(%sync_status, "node not synced");
                 }
             }
 
