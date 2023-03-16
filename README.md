@@ -9,20 +9,53 @@ All-in-one node management tool with stEVER depool support.
 
 ## How to install
 
-```bash
-# Install deps for this app
-sudo apt install pkg-config libssl-dev
+* Using Debian package
+  ```bash
+  sudo apt install path/to/stever.deb
+  ```
 
-# Install deps for the node
-sudo apt install libzstd-dev libclang-dev libtcmalloc-minimal4 libprotobuf-dev libgoogle-perftools-dev
+* Using `cargo install`
+  ```bash
+  # Install deps for this app
+  sudo apt install pkg-config libssl-dev
 
-# Install the app
-cargo install --locked --git https://github.com/broxus/stever-node-tools
-```
+  # Install deps for the node
+  sudo apt install libzstd-dev libclang-dev libtcmalloc-minimal4 libprotobuf-dev libgoogle-perftools-dev
+
+  # Install the app
+  cargo install --locked --git https://github.com/broxus/stever-node-tools
+  ```
+
+  > NOTE: `systemd` configuration is different for cargo installation,
+    see **Validation** section for more info.
 
 ## How to use
 
 ### Validation
+
+For Debian installation:
+```bash
+# Add current user to the stever group
+sudo usermod -a -G stever $USER
+# Update groups cache (you can just relogin instead)
+newgrp stever
+
+# Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+# Or update to the latest stable version:
+# rustup update stable
+
+# Configure node
+stever init
+
+# Start services
+sudo systemctl restart ever-validator
+sudo systemctl restart ever-validator-manager
+```
+
+<details><summary><b>For cargo installation:</b></summary>
+<p>
 
 ```bash
 # Optionally configure root directory:
@@ -34,13 +67,16 @@ cargo install --locked --git https://github.com/broxus/stever-node-tools
 # Configure node
 stever init
 
-sudo systemctl restart ever-validator
-sudo systemctl restart ever-validator-manager
+sudo $(which stever) init systemd
 ```
+
+</p>
+</details>
+<br>
 
 > NOTE: Make sure you back up your keys after initial configuration!
 >
-> All keys are stored at `$HOME/.stever/keys/`
+> All keys are stored at `/var/stever/keys/` (or `$HOME/.stever/keys/` by default for the cargo installation).
 
 You can also configure different steps separately:
 
