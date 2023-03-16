@@ -1,9 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::util::system;
-
 const ENV: &str = "STEVER_ROOT";
-const DEFAULT_ROOT_DIR: &str = ".stever";
 
 pub const VALIDATOR_SERVICE: &str = "ever-validator";
 pub const VALIDATOR_MANAGER_SERVICE: &str = "ever-validator-manager";
@@ -16,6 +13,7 @@ pub struct ProjectDirs {
     pub node_configs_dir: PathBuf,
     pub binaries_dir: PathBuf,
     pub node_binary: PathBuf,
+    pub default_node_db_dir: PathBuf,
     pub git_cache_dir: PathBuf,
     pub keys_dir: PathBuf,
     pub validator_keys: PathBuf,
@@ -43,6 +41,11 @@ impl ProjectDirs {
         let validator_keys = keys_dir.join("vld.keys.json");
         let depool_keys = keys_dir.join("depool.keys.json");
 
+        #[cfg(feature = "packaged")]
+        let default_node_db_dir = root.join("db");
+        #[cfg(not(feature = "packaged"))]
+        let default_node_db_dir = PathBuf::from("/var/ever/rnode");
+
         Self {
             app_config: root.join("config.toml"),
             node_config: node_configs_dir.join("config.json"),
@@ -51,6 +54,7 @@ impl ProjectDirs {
             node_configs_dir,
             binaries_dir,
             node_binary,
+            default_node_db_dir,
             git_cache_dir,
             keys_dir,
             validator_keys,
@@ -65,20 +69,32 @@ impl ProjectDirs {
         if let Ok(path) = std::env::var(ENV) {
             PathBuf::from(path)
         } else {
-            let home_dir = if let Some(uid) = system::get_sudo_uid().unwrap() {
-                system::home_dir(uid)
-            } else {
-                home::home_dir()
-            };
+            default_root_dir()
+        }
+    }
+}
 
-            match home_dir {
-                Some(home) => home.join(DEFAULT_ROOT_DIR),
-                None => {
-                    panic!(
-                        "No valid home directory path could be retrieved from the operating system"
-                    )
-                }
-            }
+#[cfg(feature = "packaged")]
+fn default_root_dir() -> PathBuf {
+    PathBuf::from("/var/stever")
+}
+
+#[cfg(not(feature = "packaged"))]
+fn default_root_dir() -> PathBuf {
+    use crate::util::system;
+
+    const DEFAULT_ROOT_DIR: &str = ".stever";
+
+    let home_dir = if let Some(uid) = system::get_sudo_uid().unwrap() {
+        system::home_dir(uid)
+    } else {
+        home::home_dir()
+    };
+
+    match home_dir {
+        Some(home) => home.join(DEFAULT_ROOT_DIR),
+        None => {
+            panic!("No valid home directory path could be retrieved from the operating system")
         }
     }
 }

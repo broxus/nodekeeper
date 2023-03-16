@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use argh::FromArgs;
@@ -19,7 +20,6 @@ const DEFAULT_CONTROL_PORT: u16 = 5031;
 const DEFAULT_LOCAL_ADNL_PORT: u16 = 0;
 const DEFAULT_ADNL_PORT: u16 = 30100;
 
-pub const DEFAULT_NODE_DB_PATH: &str = "/var/ever/rnode";
 pub const DEFAULT_NODE_REPO: &str = "https://github.com/tonlabs/ever-node.git";
 
 #[derive(FromArgs)]
@@ -127,15 +127,53 @@ async fn load_global_config(
     dirs: &ProjectDirs,
     template: &Option<Template>,
 ) -> Result<GlobalConfig> {
-    async fn download_config(url: Url) -> Result<String> {
-        match url.scheme() {
-            "file" => match url.to_file_path() {
-                Ok(path) => {
-                    std::fs::read_to_string(path).context("failed to load global config from file")
+    #[derive(Clone)]
+    enum PathOrUrl {
+        Path(PathBuf),
+        Url(Url),
+    }
+
+    impl std::fmt::Display for PathOrUrl {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::Path(path) => std::fmt::Display::fmt(&path.display(), f),
+                Self::Url(url) => std::fmt::Display::fmt(url, f),
+            }
+        }
+    }
+
+    impl FromStr for PathOrUrl {
+        type Err = anyhow::Error;
+
+        fn from_str(s: &str) -> Result<Self> {
+            let mut value = if s.starts_with("http") || s.starts_with("file") {
+                Self::Url(s.parse()?)
+            } else {
+                Self::Path(s.into())
+            };
+
+            if let Self::Url(url) = &mut value {
+                if url.scheme() == "file" {
+                    match url.to_file_path() {
+                        Ok(path) => value = Self::Path(path),
+                        Err(_) => anyhow::bail!("invalid file url"),
+                    }
                 }
-                Err(_) => anyhow::bail!("invalid file url"),
-            },
-            _ => reqwest::get(url)
+            }
+
+            if let Self::Path(path) = &value {
+                anyhow::ensure!(path.exists(), "specified path does not exist");
+            }
+            Ok(value)
+        }
+    }
+
+    async fn download_config(url: PathOrUrl) -> Result<String> {
+        match url {
+            PathOrUrl::Path(path) => {
+                std::fs::read_to_string(path).context("failed to load global config from file")
+            }
+            PathOrUrl::Url(url) => reqwest::get(url)
                 .await
                 .context("failed to download global config")?
                 .text()
@@ -175,12 +213,19 @@ async fn load_global_config(
                     Action::Mainnet => Cow::Borrowed(GlobalConfig::MAINNET),
                     Action::Testnet => Cow::Borrowed(GlobalConfig::TESTNET),
                     // Try to download config
-                    Action::Other => {
-                        let url: Url = Input::with_theme(theme)
-                            .with_prompt("Config URL")
+                    Action::Other => loop {
+                        let url: PathOrUrl = Input::with_theme(theme)
+                            .with_prompt("Config path or URL")
                             .interact_text()?;
-                        download_config(url).await.map(Cow::Owned)?
-                    }
+
+                        match download_config(url).await {
+                            Ok(config) => break Cow::Owned(config),
+                            Err(e) => {
+                                print_error(format!("Invalid config: {e:?}"));
+                                continue;
+                            }
+                        }
+                    },
                 }
             }
         };
@@ -667,7 +712,7 @@ fn setup_node_config_paths(
             let completion = &PathCompletion;
             Input::with_theme(theme)
                 .with_prompt("Specify node DB path")
-                .default(DEFAULT_NODE_DB_PATH.to_owned())
+                .default(dirs.default_node_db_dir.to_string_lossy().to_string())
                 .completion_with(completion)
                 .validate_with(|input: &String| {
                     let path = PathBuf::from(input);

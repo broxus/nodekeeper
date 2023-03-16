@@ -27,6 +27,7 @@ pub fn user_name(uid: u32) -> Option<String> {
     }
 }
 
+#[allow(unused)]
 pub fn home_dir(uid: u32) -> Option<PathBuf> {
     // SAFETY: `buf` outlives `pwd.pw_dir`
     unsafe {

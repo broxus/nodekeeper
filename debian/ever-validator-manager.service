@@ -1,0 +1,14 @@
+[Unit]
+Description=Validator Manager
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=1
+User=stever
+ExecStart=/usr/local/bin/stever --root /var/stever validator
+
+[Install]
+WantedBy=multi-user.target
