@@ -1,0 +1,15 @@
+[Unit]
+Description=Validator Node
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=1
+User=stever
+LimitNOFILE=2048000
+ExecStart=/var/stever/bin/node --configs /var/stever/node
+
+[Install]
+WantedBy=multi-user.target

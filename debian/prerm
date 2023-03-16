@@ -1,0 +1,7 @@
+#!/bin/sh
+set -e
+
+deluser stever -f
+groupdel stever
+
+#DEBHELPER#

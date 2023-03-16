@@ -1,11 +1,12 @@
 [package]
 name = "stever"
 description = "All-in-one node management tool with stEVER depool support."
-version = "0.1.4"
+version = "0.1.5"
 authors = ["Ivan Kalinin <i.kalinin@dexpa.io>"]
 repository = "https://github.com/broxus/stever-node-tools"
 edition = "2021"
 rust-version = "1.65"
+license-file = "./LICENSE"
 
 [dependencies]
 aes = "0.8"
@@ -70,3 +71,30 @@ ton_executor = { git = "https://github.com/broxus/ton-labs-executor.git" }
 
 nekoton-abi = { git = "https://github.com/broxus/nekoton.git", features = ["derive"] }
 nekoton-utils = { git = "https://github.com/broxus/nekoton.git" }
+
+[features]
+default = []
+packaged = []
+
+[package.metadata.deb]
+features = ["packaged"]
+depends = "build-essential, libssl-dev, pkg-config, libzstd-dev, libclang-dev, libgoogle-perftools-dev, git"
+section = "utility"
+assets = [
+    [
+        "target/release/stever",
+        "/usr/local/bin/stever",
+        "755",
+    ],
+    [
+        "README.md",
+        "usr/share/doc/stever/README",
+        "644",
+    ],
+]
+conf-files = ["/etc/stever/"]
+maintainer-scripts = "debian/"
+systemd-units = [
+    { unit-name = "ever-validator", enable = true, start = false },
+    { unit-name = "ever-validator-manager", enable = true, start = false },
+]
