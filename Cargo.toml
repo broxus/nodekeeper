@@ -78,7 +78,7 @@ packaged = []
 
 [package.metadata.deb]
 features = ["packaged"]
-depends = "libstdc++6, libssl-dev, pkg-config, libzstd-dev, libclang-dev, libgoogle-perftools-dev, git"
+depends = "build-essential, libssl-dev, pkg-config, libzstd-dev, libclang-dev, libgoogle-perftools-dev, git"
 section = "utility"
 assets = [
     [
@@ -95,6 +95,6 @@ assets = [
 conf-files = ["/etc/stever/"]
 maintainer-scripts = "debian/"
 systemd-units = [
-    { unit-name = "ever-validator", enable = true },
-    { unit-name = "ever-validator-manager", enable = true },
+    { unit-name = "ever-validator", enable = true, start = false },
+    { unit-name = "ever-validator-manager", enable = true, start = false },
 ]

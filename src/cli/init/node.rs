@@ -221,7 +221,7 @@ async fn load_global_config(
                         match download_config(url).await {
                             Ok(config) => break Cow::Owned(config),
                             Err(e) => {
-                                print_error(format!("Invalid config: {e:?}"));
+                                print_error(format!("Invalid config: {e}"));
                                 continue;
                             }
                         }

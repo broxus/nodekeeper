@@ -4,6 +4,11 @@ set -e
 if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ]; then
   useradd stever -r
   path="/var/stever"
-  (mkdir -p $path && chown stever:stever -R $path) || true
+
+  mkdir -p $path
+
+  chown stever:stever -R $path
+  chmod 770 -R $path
+  chmod g+s -R $path
 fi
 #DEBHELPER#
