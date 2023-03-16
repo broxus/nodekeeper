@@ -12,6 +12,7 @@ use super::{CliContext, ProjectDirs};
 
 mod contracts;
 mod node;
+#[cfg(not(feature = "packaged"))]
 mod systemd;
 
 #[derive(FromArgs)]
@@ -68,6 +69,7 @@ impl Cmd {
                 let template = load_template(self.template)?;
                 cmd.run(theme, &ctx, &template).await
             }
+            #[cfg(not(feature = "packaged"))]
             Some(SubCmd::Systemd(cmd)) => {
                 anyhow::ensure!(
                     self.template.is_none(),
@@ -84,6 +86,7 @@ impl Cmd {
 enum SubCmd {
     Node(node::Cmd),
     Contracts(contracts::Cmd),
+    #[cfg(not(feature = "packaged"))]
     Systemd(systemd::Cmd),
 }
 

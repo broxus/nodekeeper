@@ -6,6 +6,7 @@ use std::ptr;
 
 use anyhow::{Context, Result};
 
+#[allow(unused)]
 pub fn get_sudo_uid() -> Result<Option<u32>> {
     match std::env::var("SUDO_UID") {
         Ok(uid) => Ok(Some(uid.parse().context("invalid SUDO_UID")?)),
@@ -13,11 +14,13 @@ pub fn get_sudo_uid() -> Result<Option<u32>> {
     }
 }
 
+#[allow(unused)]
 pub fn user_id() -> u32 {
     // SAFETY: no errors are defined
     unsafe { libc::getuid() }
 }
 
+#[allow(unused)]
 pub fn user_name(uid: u32) -> Option<String> {
     // SAFETY: `buf` outlives `pwd.pw_name`
     unsafe {

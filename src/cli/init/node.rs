@@ -87,6 +87,8 @@ impl Cmd {
 
         // Notify user about creating systemd services
         steps.next("Node is configured now. Great!");
+
+        #[cfg(not(feature = "packaged"))]
         check_systemd_service(dirs)?;
 
         Ok(())
@@ -863,6 +865,7 @@ async fn build_node<P: AsRef<Path>>(target: P, features: &[String]) -> Result<Pa
     Ok(target.join("target").join("release").join("ton_node"))
 }
 
+#[cfg(not(feature = "packaged"))]
 fn check_systemd_service(dirs: &ProjectDirs) -> Result<()> {
     use std::ffi::OsStr;
 

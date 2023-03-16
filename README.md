@@ -34,8 +34,8 @@ cargo install --locked --git https://github.com/broxus/stever-node-tools
 # Configure node
 stever init
 
-# Optionally (if user isn't root) configure systemd services
-sudo stever init systemd
+sudo systemctl restart ever-validator
+sudo systemctl restart ever-validator-manager
 ```
 
 > NOTE: Make sure you back up your keys after initial configuration!
