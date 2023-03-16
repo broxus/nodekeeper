@@ -67,3 +67,34 @@ jobs:
         with:
           command: clippy
           args: -- -D warnings
+
+  build-deb:
+    name: Build .deb package
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2
+
+      - name: Install stable toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - name: Install `cargo-deb`
+        uses: actions-rs/cargo@v1
+        with:
+          command: install
+          args: cargo-deb
+
+      - name: Run cargo check
+        uses: actions-rs/cargo@v1
+        with:
+          command: deb
+          args: --output stever.deb
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: stever.deb
+          path: stever.deb
