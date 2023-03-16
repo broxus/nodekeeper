@@ -1,3 +1,12 @@
+# 0.1.5 (2023-03-16)
+
+### Added
+
+- `.deb` package build.
+- You can now specify file path for a global config during `stever node init`
+  (it used to be only URL).
+- Added check for the Rust installation.
+
 # 0.1.4 (2023-02-15)
 
 ### Added
@@ -13,10 +22,10 @@
       `validator_single_stake_per_round`: stake in nano EVERs.
 
       Labels: `validator` - validator wallet address.
-    * <sub>if validation is enabled and `validator_type=1`</sub> 
+    * <sub>if validation is enabled and `validator_type=1`</sub>
 
       `validator_depool_type`: `0` - default_v3, `1` - stever_v1, `2` - stever_v2.
-      
+
       Labels: `validator` - validator wallet address, `depool` - depool address.
 
 ### Changed

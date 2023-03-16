@@ -835,12 +835,12 @@ async fn clone_repo<P: AsRef<Path>>(url: &Url, branch: &Option<String>, target: 
 async fn build_node<P: AsRef<Path>>(target: P, features: &[String]) -> Result<PathBuf> {
     let target = target.as_ref();
 
-    if let Err(e) = exec(&mut Command::new("cargo").arg("-V")).await {
-        print_error(format!(
+    if let Err(e) = exec(Command::new("cargo").arg("-V")).await {
+        print_error(
             "Failed to check `cargo` version. Rust is not installed properly.\n  \
                Please use the following command to install:\n\n\
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh\n"
-        ));
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh\n",
+        );
         return Err(e);
     }
 
