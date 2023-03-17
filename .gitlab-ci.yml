@@ -1,0 +1,16 @@
+include:
+  - project: "infrastructure/gitlab-ci"
+    ref: main
+    file: "/templates/cloudbuild-common.gitlab-ci.yaml"
+
+stages:
+  - cloudbuild
+
+cloudbuild:package:
+  extends: .cloudbuild:deb-package
+  only:
+    - tags
+  except:
+    - branches
+  variables:
+    REPO_NAME: broxus-deb-pub
