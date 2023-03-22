@@ -7,8 +7,8 @@ StartLimitIntervalSec=0
 Type=simple
 Restart=always
 RestartSec=1
-User=stever
-ExecStart=/usr/local/bin/stever --root /var/stever validator
+User=nodekeeper
+ExecStart=/usr/local/bin/nodekeeper --root /var/nodekeeper validator
 
 [Install]
 WantedBy=multi-user.target

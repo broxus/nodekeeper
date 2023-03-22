@@ -109,6 +109,8 @@ fn prepare_single_validator(
     const MIN_STAKE: u64 = 10_000 * ONE_EVER as u64;
     const MAX_STAKE: u64 = 10_000_000 * ONE_EVER as u64;
 
+    let currency = &app_config.currency().to_owned();
+
     let mut steps = Steps::new(2);
 
     // Prepare validator wallet
@@ -131,22 +133,28 @@ fn prepare_single_validator(
         Some(template) => {
             let stake = template.stake_per_round;
             if stake > MAX_STAKE {
-                anyhow::bail!("Too big stake (max stake is {} EVER)", Ever(MAX_STAKE));
+                anyhow::bail!(
+                    "Too big stake (max stake is {} {currency})",
+                    Tokens(MAX_STAKE)
+                );
             } else if stake < MIN_STAKE {
-                anyhow::bail!("Too small stake (min stake is {} EVER)", Ever(MIN_STAKE));
+                anyhow::bail!(
+                    "Too small stake (min stake is {} {currency})",
+                    Tokens(MIN_STAKE)
+                );
             }
             stake
         }
         None => Input::with_theme(theme)
-            .with_prompt("Stake per round (EVER)")
+            .with_prompt(format!("Stake per round ({currency})"))
             .validate_with(|stake: &u64| match stake.saturating_mul(ONE_EVER as u64) {
                 x if x > MAX_STAKE => Err(format!(
-                    "Too big stake (max stake is {} EVER)",
-                    Ever(MAX_STAKE)
+                    "Too big stake (max stake is {} {currency})",
+                    Tokens(MAX_STAKE)
                 )),
                 x if x < MIN_STAKE => Err(format!(
-                    "Too small stake (min stake is {} EVER)",
-                    Ever(MIN_STAKE)
+                    "Too small stake (min stake is {} {currency})",
+                    Tokens(MIN_STAKE)
                 )),
                 _ => Ok(()),
             })
@@ -175,12 +183,12 @@ fn prepare_single_validator(
         style("Validator wallet address:").green().bold(),
         style(wallet_address).bold(),
         style("Required validator wallet balance:").green().bold(),
-        style(format!("{} EVER", Ever(target_balance))).bold(),
+        style(format!("{} {currency}", Tokens(target_balance))).bold(),
         style(format!(
-            "\n  • {} EVER, maintenance balance\
-             \n  • 2 x {} EVER, stakes for each round",
-            Ever(Wallet::INITIAL_BALANCE),
-            Ever(target_balance)
+            "\n  • {} {currency}, maintenance balance\
+             \n  • 2 x {} {currency}, stakes for each round",
+            Tokens(Wallet::INITIAL_BALANCE),
+            Tokens(stake_per_round)
         ))
         .dim(),
         style("Make sure you back up your keys:").yellow().bold(),
@@ -198,15 +206,17 @@ fn prepare_depool_validator(
 ) -> Result<()> {
     use crate::contracts::*;
 
+    let currency = &app_config.currency().to_owned();
+
     let (mut steps, params) = match template {
-        Some(template) => prepare_new_depool(theme, dirs, Some(template))?,
+        Some(template) => prepare_new_depool(theme, dirs, currency, Some(template))?,
         None => match Select::with_theme(theme)
             .item("Deploy new DePool")
             .item("Use existing DePool")
             .default(0)
             .interact()?
         {
-            0 => prepare_new_depool(theme, dirs, None)?,
+            0 => prepare_new_depool(theme, dirs, currency, None)?,
             _ => prepare_existing_depool(theme, dirs)?,
         },
     };
@@ -236,22 +246,24 @@ fn prepare_depool_validator(
         let mut factory_deployment_note = "".to_owned();
         if params.strategy_factory.is_some() {
             target_balance += strategy_fee;
-            factory_deployment_note =
-                format!("\n  • {} EVER, strategy deployment fee", Ever(strategy_fee));
+            factory_deployment_note = format!(
+                "\n  • {} {currency}, strategy deployment fee",
+                Tokens(strategy_fee)
+            );
         }
 
         println!(
             "\n{} {}{}",
             style("Required validator wallet balance:").green().bold(),
-            style(format!("{} EVER", Ever(target_balance))).bold(),
+            style(format!("{} {currency}", Tokens(target_balance))).bold(),
             style(format!(
-                "\n  • {} EVER, maintenance balance\
-                 \n  • {} EVER, DePool deployment fee\
+                "\n  • {} {currency}, maintenance balance\
+                 \n  • {} {currency}, DePool deployment fee\
                  {factory_deployment_note}\
-                 \n  • 2 x {} EVER, stakes for each round",
-                Ever(Wallet::INITIAL_BALANCE),
-                Ever(DePool::INITIAL_BALANCE),
-                Ever(deployment.validator_assurance),
+                 \n  • 2 x {} {currency}, stakes for each round",
+                Tokens(Wallet::INITIAL_BALANCE),
+                Tokens(DePool::INITIAL_BALANCE),
+                Tokens(deployment.validator_assurance),
             ))
             .dim()
         );
@@ -270,6 +282,7 @@ fn prepare_depool_validator(
 fn prepare_new_depool(
     theme: &dyn Theme,
     dirs: &ProjectDirs,
+    currency: &str,
     template: Option<&TemplateValidatorDePool>,
 ) -> Result<(Steps, AppConfigValidatorDePool)> {
     let mut steps = Steps::new(2);
@@ -306,7 +319,7 @@ fn prepare_new_depool(
         Some(template) => template.depool_type,
         None => match Select::with_theme(theme)
             .with_prompt("Select DePool type")
-            .item("stEVER")
+            .item(format!("st{currency}"))
             .item("DePoolV3")
             .default(0)
             .interact()?
@@ -327,15 +340,15 @@ fn prepare_new_depool(
             let stake = template.deploy.min_stake;
             anyhow::ensure!(
                 stake >= 10 * ONE_EVER as u64,
-                "Minimum stake is too small (< 10 EVER)"
+                "Minimum stake is too small (< 10 {currency})"
             );
             stake
         }
         None => Input::with_theme(theme)
-            .with_prompt("Minimum participant stake (EVER)")
+            .with_prompt(format!("Minimum participant stake ({currency})"))
             .default(DEFAULT_MIN_STAKE)
             .validate_with(|value: &u64| match *value {
-                x if x < 10 => Err("Minimum stake is too small (< 10 EVER)"),
+                x if x < 10 => Err(format!("Minimum stake is too small (< 10 {currency})")),
                 _ => Ok(()),
             })
             .interact_text()?
@@ -348,7 +361,7 @@ fn prepare_new_depool(
             let assurance = template.deploy.validator_assurance;
             anyhow::ensure!(
                 assurance >= 10 * ONE_EVER as u64,
-                "Too small validator assurance (< 10 EVER)"
+                "Too small validator assurance (< 10 {currency})"
             );
             anyhow::ensure!(
                 assurance >= min_stake,
@@ -357,12 +370,12 @@ fn prepare_new_depool(
             assurance
         }
         None => Input::with_theme(theme)
-            .with_prompt("Validator assurance (EVER)")
+            .with_prompt(format!("Validator assurance ({currency})"))
             .default(DEFAULT_VALIDATOR_ASSURANCE)
             .validate_with(|value: &u64| match *value {
-                x if x < 10 => Err("Too small validator assurance (< 10 EVER)"),
+                x if x < 10 => Err(format!("Too small validator assurance (< 10 {currency})")),
                 x if x.saturating_mul(ONE_EVER as u64) < min_stake => {
-                    Err("Validator assurance is less than minimum stake")
+                    Err("Validator assurance is less than minimum stake".to_owned())
                 }
                 _ => Ok(()),
             })

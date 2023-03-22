@@ -92,9 +92,9 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: deb
-          args: --output stever.deb
+          args: --output nodekeeper.deb
 
       - uses: actions/upload-artifact@v3
         with:
-          name: stever.deb
-          path: stever.deb
+          name: nodekeeper.deb
+          path: nodekeeper.deb

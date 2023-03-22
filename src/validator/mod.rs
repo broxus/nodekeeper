@@ -11,7 +11,7 @@ use crate::config::*;
 use crate::contracts::*;
 use crate::dirs::ProjectDirs;
 use crate::network::{ConfigWithId, NodeStats, NodeTcpRpc, NodeUdpRpc, Subscription};
-use crate::util::Ever;
+use crate::util::Tokens;
 
 pub struct ValidationManager {
     dirs: ProjectDirs,
@@ -312,7 +312,7 @@ impl AppConfigValidatorSingle {
         tracing::info!(
             election_id = ctx.election_id,
             address = %self.address,
-            stake = %Ever(self.stake_per_round),
+            stake = %Tokens(self.stake_per_round),
             stake_factor = ?self.stake_factor,
             "election as single"
         );
@@ -330,7 +330,7 @@ impl AppConfigValidatorSingle {
             let _guard = ctx.guard.lock().await;
 
             // Send recover stake message
-            tracing::info!(stake = %Ever(stake.0), "recovering stake");
+            tracing::info!(stake = %Tokens(stake.0), "recovering stake");
             wallet
                 .call(ctx.elector.recover_stake()?)
                 .await
@@ -738,9 +738,9 @@ impl AppConfigValidatorDePool {
             };
 
             tracing::debug!(
-                target_round_stake = %Ever(target_round.validator_stake),
+                target_round_stake = %Tokens(target_round.validator_stake),
                 target_round_step = ?target_round.step,
-                pooling_round_stake = %Ever(pooling_round_stake),
+                pooling_round_stake = %Tokens(pooling_round_stake),
             );
 
             // Add ordinary stake to the pooling round if needed
@@ -758,7 +758,7 @@ impl AppConfigValidatorDePool {
                     let _guard = ctx.guard.lock().await;
 
                     // Send recover stake message
-                    tracing::info!(stake = %Ever(remaining_stake), "adding ordinary stake");
+                    tracing::info!(stake = %Tokens(remaining_stake), "adding ordinary stake");
                     wallet
                         .call(depool.add_ordinary_stake(remaining_stake)?)
                         .await
@@ -875,7 +875,7 @@ impl Wallet {
             match self.get_balance().await?.unwrap_or_default() {
                 balance if balance >= target => {
                     if last_balance.is_some() {
-                        tracing::info!(balance = %Ever(balance), "fetched wallet balance");
+                        tracing::info!(balance = %Tokens(balance), "fetched wallet balance");
                     }
                     break Ok(balance);
                 }
@@ -883,8 +883,8 @@ impl Wallet {
                     if !matches!(last_balance, Some(last_balance) if last_balance == balance) {
                         tracing::info!(
                             address = %self.address(),
-                            current_balance = %Ever(balance),
-                            target_balance = %Ever(target),
+                            current_balance = %Tokens(balance),
+                            target_balance = %Tokens(target),
                             "waiting until validator wallet balance is enough",
                         );
                     }

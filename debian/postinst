@@ -2,12 +2,12 @@
 set -e
 
 if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ]; then
-  useradd stever -r
-  path="/var/stever"
+  useradd nodekeeper -r
+  path="/var/nodekeeper"
 
   mkdir -p $path
 
-  chown stever:stever -R $path
+  chown nodekeeper:nodekeeper -R $path
   chmod 770 -R $path
   chmod g+s -R $path
 fi

@@ -13,7 +13,7 @@ pub mod node;
 pub mod seed;
 pub mod validator;
 
-/// All-in-one node management tool with support for the upcoming stEVER
+/// All-in-one node management tool
 #[derive(FromArgs)]
 pub struct App {
     #[argh(subcommand)]

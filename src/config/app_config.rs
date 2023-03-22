@@ -10,6 +10,7 @@ use broxus_util::{
 use everscale_crypto::ed25519;
 use serde::{Deserialize, Serialize};
 
+use crate::currency;
 use crate::util::{serde_mc_address, serde_public_key, serde_secret_key};
 
 /// Tool config
@@ -33,6 +34,20 @@ impl AppConfig {
     pub fn store<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let data = toml::to_string_pretty(self).context("failed to serialize config")?;
         std::fs::write(path, data).context("failed to save config")
+    }
+
+    pub fn currency(&self) -> &str {
+        if let Some(currency) = currency::from_env() {
+            return currency;
+        }
+
+        if let Some(adnl) = &self.adnl {
+            if let Some(currency) = currency::detect_custom_currency(&adnl.zerostate_file_hash) {
+                return currency;
+            }
+        }
+
+        currency::DEFAULT
     }
 
     pub fn control(&self) -> Result<&AppConfigControl> {

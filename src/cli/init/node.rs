@@ -878,7 +878,7 @@ fn check_systemd_service(dirs: &ProjectDirs) -> Result<()> {
     let current_exe = std::env::current_exe()?;
     let current_exe = current_exe
         .file_name()
-        .unwrap_or_else(|| OsStr::new("stever"))
+        .unwrap_or_else(|| OsStr::new("nodekeeper"))
         .to_string_lossy();
 
     println!("\nTo configure systemd services, run:\n    sudo {current_exe} init systemd");

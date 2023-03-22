@@ -7,9 +7,9 @@ StartLimitIntervalSec=0
 Type=simple
 Restart=always
 RestartSec=1
-User=stever
+User=nodekeeper
 LimitNOFILE=2048000
-ExecStart=/var/stever/bin/node --configs /var/stever/node
+ExecStart=/var/nodekeeper/bin/node --configs /var/nodekeeper/node
 
 [Install]
 WantedBy=multi-user.target

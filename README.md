@@ -1,17 +1,17 @@
-## stEVER Node Tools &emsp; [![stever-node-tools: rustc 1.65+]][Rust 1.65] [![Workflow badge]][Workflow]
+## nodekeeper &emsp; [![rust-version-badge]][rust-version-link] [![workflow-badge]][workflow-link]
 
-[stever-node-tools: rustc 1.65+]: https://img.shields.io/badge/rustc-1.65+-lightgray.svg
-[Rust 1.65]: https://blog.rust-lang.org/2022/11/03/Rust-1.65.0.html
-[Workflow badge]: https://img.shields.io/github/actions/workflow/status/broxus/stever-node-tools/master.yml?branch=master
-[Workflow]: https://github.com/broxus/stever-node-tools/actions?query=workflow%3Amaster
+[rust-version-badge]: https://img.shields.io/badge/rustc-1.67+-lightgray.svg
+[rust-version-alt]: https://blog.rust-lang.org/2023/01/26/Rust-1.67.0.html
+[workflow-badge]: https://img.shields.io/github/actions/workflow/status/broxus/nodekeeper/master.yml?branch=master
+[workflow-link]: https://github.com/broxus/nodekeeper/actions?query=workflow%3Amaster
 
-All-in-one node management tool with stEVER depool support.
+All-in-one node management tool.
 
 ## How to install
 
 * Using Debian package
   ```bash
-  sudo apt install path/to/stever.deb
+  sudo apt install path/to/nodekeeper.deb
   ```
 
 * Using `cargo install`
@@ -23,7 +23,7 @@ All-in-one node management tool with stEVER depool support.
   sudo apt install libzstd-dev libclang-dev libtcmalloc-minimal4 libprotobuf-dev libgoogle-perftools-dev
 
   # Install the app
-  cargo install --locked --git https://github.com/broxus/stever-node-tools
+  cargo install --locked --git https://github.com/broxus/nodekeeper
   ```
 
   > NOTE: `systemd` configuration is different for cargo installation,
@@ -35,10 +35,10 @@ All-in-one node management tool with stEVER depool support.
 
 For Debian installation:
 ```bash
-# Add current user to the stever group
-sudo usermod -a -G stever $USER
+# Add current user to the nodekeeper group
+sudo usermod -a -G nodekeeper $USER
 # Update groups cache (you can just relogin instead)
-newgrp stever
+newgrp nodekeeper
 
 # Install Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -47,11 +47,11 @@ source "$HOME/.cargo/env"
 # rustup update stable
 
 # Configure node
-stever init
+nodekeeper init
 
 # Start services
-sudo systemctl restart ever-validator
-sudo systemctl restart ever-validator-manager
+sudo systemctl restart validator
+sudo systemctl restart validator-manager
 ```
 
 <details><summary><b>For cargo installation:</b></summary>
@@ -59,15 +59,15 @@ sudo systemctl restart ever-validator-manager
 
 ```bash
 # Optionally configure root directory:
-# export STEVER_ROOT=/var/stever
+# export NODEKEEPER_ROOT=/var/nodekeeper
 #
 # Or explicitly specify it as a param, e.g.:
-# stever --root /var/stever init
+# nodekeeper --root /var/nodekeeper init
 
 # Configure node
-stever init
+nodekeeper init
 
-sudo $(which stever) init systemd
+sudo $(which nodekeeper) init systemd
 ```
 
 </p>
@@ -76,33 +76,33 @@ sudo $(which stever) init systemd
 
 > NOTE: Make sure you back up your keys after initial configuration!
 >
-> All keys are stored at `/var/stever/keys/` (or `$HOME/.stever/keys/` by default for the cargo installation).
+> All keys are stored at `/var/nodekeeper/keys/` (or `$HOME/.nodekeeper/keys/` by default for the cargo installation).
 
 You can also configure different steps separately:
 
 ```bash
 # Initialize only node configs
-stever init node
+nodekeeper init node
 
 # Initialize only contracts
-stever init contracts
+nodekeeper init contracts
 ```
 
 Updating the node:
 
 ```bash
-stever init node --rebuild
-sudo systemctl restart ever-validator
+nodekeeper init node --rebuild
+sudo systemctl restart validator
 ```
 
 ### Metrics exporter
 
 ```bash
 # Metrics exporter as a server
-stever exporter --addr 0.0.0.0:10100
+nodekeeper exporter --addr 0.0.0.0:10100
 
 # Metrics exporter to the file
-stever exporter --file /var/www/node_metrics.txt
+nodekeeper exporter --file /var/www/node_metrics.txt
 ```
 
 <details><summary><b>Example metrics</b></summary>
@@ -129,18 +129,18 @@ in_next_vset 0
 
 ```bash
 # Generate new seed
-stever seed generate
+nodekeeper seed generate
 #decline weapon swift luggage gorilla odor clown million leaf royal object movie
 
 # Derive keypair from the seed
-stever seed generate | stever seed derive
+nodekeeper seed generate | nodekeeper seed derive
 #{
 #  "public": "72e8cb80621c41a95da3a004139ceefa39e8709e7a8183ed9ad601ce9a13714d",
 #  "secret": "435726770e17089f6c0b647f5ce7418ba6d07ca6b8c15d0c42e2379d1a09b6cc"
 #}
 
 # Derive keypair from the secret
-stever seed pubkey 435726770e17089f6c0b647f5ce7418ba6d07ca6b8c15d0c42e2379d1a09b6cc
+nodekeeper seed pubkey 435726770e17089f6c0b647f5ce7418ba6d07ca6b8c15d0c42e2379d1a09b6cc
 #{
 #  "public": "72e8cb80621c41a95da3a004139ceefa39e8709e7a8183ed9ad601ce9a13714d",
 #  "secret": "435726770e17089f6c0b647f5ce7418ba6d07ca6b8c15d0c42e2379d1a09b6cc"
@@ -151,14 +151,14 @@ stever seed pubkey 435726770e17089f6c0b647f5ce7418ba6d07ca6b8c15d0c42e2379d1a09b
 
 ```bash
 # Compute account address and stateinit
-stever contract stateinit < ./path/to/Contract.tvc
+nodekeeper contract stateinit < ./path/to/Contract.tvc
 #{
 #  "address": "0:1df86a0f06aec400d04719052e6a17dffadc09f915c5e35e959d37d59beb7ac3",
 #  "tvc": "te6ccgICAQAAA...some long base64 encoded BOC...AxWw=="
 #}
 
 # Execute getters locally
-stever contract call \
+nodekeeper contract call \
     getParticipantInfo \
     '{"addr":"0:2f61300e70e2cdb5f96d3d7a0d60c70dfa515f89c3d4926e958b5eb147977469"}' \
     --addr '0:5325f4965e6388f97ae2578c19e8ffbc080f29d2357c5712d2a21d640dc10fb7' \
@@ -185,7 +185,7 @@ stever contract call \
 
 ```bash
 # Get config params
-stever node getparam 14
+nodekeeper node getparam 14
 #{
 #  "block_id": "-1:8000000000000000:156446:e6a099e43ba0e2a9b7b0d1e9b5207cef4e0e54c1dc2ea8811f0877ad78516bc0:fdca14025ba3b16b4286a561b7ade73f3e26a0224e9492cefc77b83ed649f37d",
 #  "value": {
@@ -197,7 +197,7 @@ stever node getparam 14
 #}
 
 # Send message
-stever node sendmessage < ./path/to/message.boc
+nodekeeper node sendmessage < ./path/to/message.boc
 
 # and others
 ```
@@ -208,9 +208,9 @@ stever node sendmessage < ./path/to/message.boc
 <p>
 
 ```
-Usage: stever [--root <root>] <command> [<args>]
+Usage: nodekeeper [--root <root>] <command> [<args>]
 
-All-in-one node management tool with support for the upcoming stEVER
+All-in-one node management tool.
 
 Options:
   --root            path to the root directory
@@ -231,7 +231,7 @@ Commands:
 ## How it works
 
 This tool is a replacement of `ever-node-tools` and contains all the necessary functionality to manage a node.
-During initialization steps it prepares configs (at `$HOME/.stever` by default), downloads and builds the node,
+During initialization steps it prepares configs (at `$HOME/.nodekeeper` by default), downloads and builds the node,
 and deploys necessery contracts (all this through a cli with convenient choices!).
 
 After contracts configuration this tool manages validator wallet (which is [EVER Wallet contract](https://github.com/broxus/ever-wallet-contract))
@@ -239,8 +239,8 @@ and optionally a DePool (default v3 or stEVER variant);
 
 The update logic is based on two `systemd` services:
 
-- `ever-validator` - the node itself;
-- `ever-validator-manager` - service wrapper around `stever validator` command;
+- `validator` - the node itself;
+- `validator-manager` - service wrapper around `nodekeeper validator` command;
 
 It uses two protocols to communicate with the node - the first one is for the control server (`TCP ADNL`),
 and the second is for other stuff (`UDP ADNL`, same as the protocol used by all nodes in the network).
