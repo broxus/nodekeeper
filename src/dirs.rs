@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 
-const ENV: &str = "STEVER_ROOT";
+const ENV: &str = "NODEKEEPER_ROOT";
 
-pub const VALIDATOR_SERVICE: &str = "ever-validator";
-pub const VALIDATOR_MANAGER_SERVICE: &str = "ever-validator-manager";
+pub const VALIDATOR_SERVICE: &str = "validator";
+pub const VALIDATOR_MANAGER_SERVICE: &str = "validator-manager";
 
 pub struct ProjectDirs {
     pub app_config: PathBuf,
@@ -76,14 +76,14 @@ impl ProjectDirs {
 
 #[cfg(feature = "packaged")]
 fn default_root_dir() -> PathBuf {
-    PathBuf::from("/var/stever")
+    PathBuf::from("/var/nodekeeper")
 }
 
 #[cfg(not(feature = "packaged"))]
 fn default_root_dir() -> PathBuf {
     use crate::util::system;
 
-    const DEFAULT_ROOT_DIR: &str = ".stever";
+    const DEFAULT_ROOT_DIR: &str = ".nodekeeper";
 
     let home_dir = if let Some(uid) = system::get_sudo_uid().unwrap() {
         system::home_dir(uid)

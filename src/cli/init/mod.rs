@@ -203,21 +203,13 @@ struct TemplateValidatorDePool {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     stake_factor: Option<u32>,
 
-    /// Strategy factory address.
+    /// stEVER cluster address.
     #[serde(
         default,
         with = "serde_optional_string",
         skip_serializing_if = "Option::is_none"
     )]
-    strategy_factory: Option<ton_block::MsgAddressInt>,
-
-    /// Explicit strategy address.
-    #[serde(
-        default,
-        with = "serde_optional_string",
-        skip_serializing_if = "Option::is_none"
-    )]
-    strategy: Option<ton_block::MsgAddressInt>,
+    cluster: Option<ton_block::MsgAddressInt>,
 
     /// DePool deployment params.
     #[serde(flatten)]

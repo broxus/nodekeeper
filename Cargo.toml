@@ -1,11 +1,11 @@
 [package]
-name = "stever"
-description = "All-in-one node management tool with stEVER depool support."
-version = "0.1.5"
+name = "nodekeeper"
+description = "All-in-one node management tool."
+version = "0.2.0"
 authors = ["Ivan Kalinin <i.kalinin@dexpa.io>"]
-repository = "https://github.com/broxus/stever-node-tools"
+repository = "https://github.com/broxus/nodekeeper"
 edition = "2021"
-rust-version = "1.65"
+rust-version = "1.67"
 license-file = "./LICENSE"
 
 [dependencies]
@@ -82,19 +82,19 @@ depends = "build-essential, libssl-dev, pkg-config, libzstd-dev, libclang-dev, l
 section = "utility"
 assets = [
     [
-        "target/release/stever",
-        "/usr/local/bin/stever",
+        "target/release/nodekeeper",
+        "/usr/local/bin/nodekeeper",
         "755",
     ],
     [
         "README.md",
-        "usr/share/doc/stever/README",
+        "usr/share/doc/nodekeeper/README",
         "644",
     ],
 ]
-conf-files = ["/etc/stever/"]
+conf-files = ["/etc/nodekeeper/"]
 maintainer-scripts = "debian/"
 systemd-units = [
-    { unit-name = "ever-validator", enable = true, start = false },
-    { unit-name = "ever-validator-manager", enable = true, start = false },
+    { unit-name = "validator", enable = true, start = false },
+    { unit-name = "validator-manager", enable = true, start = false },
 ]

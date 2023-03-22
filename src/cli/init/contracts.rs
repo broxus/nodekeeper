@@ -20,9 +20,6 @@ const DEFAULT_MIN_STAKE: u64 = 10;
 const DEFAULT_VALIDATOR_ASSURANCE: u64 = 10_000;
 const DEFAULT_PARTICIPANT_REWARD_FRACTION: u8 = 95;
 
-const DEFAULT_STRATEGY_FACTORY: &str =
-    "0:519a1205bd021e5e0aa4b64f5ab689bc383efb4f94f283eac78926da71cfe100";
-
 #[derive(FromArgs)]
 /// Deploys contracts required for validation
 #[argh(subcommand, name = "contracts")]
@@ -109,11 +106,13 @@ fn prepare_single_validator(
     const MIN_STAKE: u64 = 10_000 * ONE_EVER as u64;
     const MAX_STAKE: u64 = 10_000_000 * ONE_EVER as u64;
 
+    let currency = &app_config.currency().to_owned();
+
     let mut steps = Steps::new(2);
 
     // Prepare validator wallet
     steps.next("Creating validator wallet");
-    let (_, keypair) = KeysSelector {
+    let keypair = KeysSelector {
         theme,
         prompt: "Validator wallet",
         path: &dirs.validator_keys,
@@ -131,22 +130,28 @@ fn prepare_single_validator(
         Some(template) => {
             let stake = template.stake_per_round;
             if stake > MAX_STAKE {
-                anyhow::bail!("Too big stake (max stake is {} EVER)", Ever(MAX_STAKE));
+                anyhow::bail!(
+                    "Too big stake (max stake is {} {currency})",
+                    Tokens(MAX_STAKE)
+                );
             } else if stake < MIN_STAKE {
-                anyhow::bail!("Too small stake (min stake is {} EVER)", Ever(MIN_STAKE));
+                anyhow::bail!(
+                    "Too small stake (min stake is {} {currency})",
+                    Tokens(MIN_STAKE)
+                );
             }
             stake
         }
         None => Input::with_theme(theme)
-            .with_prompt("Stake per round (EVER)")
+            .with_prompt(format!("Stake per round ({currency})"))
             .validate_with(|stake: &u64| match stake.saturating_mul(ONE_EVER as u64) {
                 x if x > MAX_STAKE => Err(format!(
-                    "Too big stake (max stake is {} EVER)",
-                    Ever(MAX_STAKE)
+                    "Too big stake (max stake is {} {currency})",
+                    Tokens(MAX_STAKE)
                 )),
                 x if x < MIN_STAKE => Err(format!(
-                    "Too small stake (min stake is {} EVER)",
-                    Ever(MIN_STAKE)
+                    "Too small stake (min stake is {} {currency})",
+                    Tokens(MIN_STAKE)
                 )),
                 _ => Ok(()),
             })
@@ -175,12 +180,12 @@ fn prepare_single_validator(
         style("Validator wallet address:").green().bold(),
         style(wallet_address).bold(),
         style("Required validator wallet balance:").green().bold(),
-        style(format!("{} EVER", Ever(target_balance))).bold(),
+        style(format!("{} {currency}", Tokens(target_balance))).bold(),
         style(format!(
-            "\n  • {} EVER, maintenance balance\
-             \n  • 2 x {} EVER, stakes for each round",
-            Ever(Wallet::INITIAL_BALANCE),
-            Ever(target_balance)
+            "\n  • {} {currency}, maintenance balance\
+             \n  • 2 x {} {currency}, stakes for each round",
+            Tokens(Wallet::INITIAL_BALANCE),
+            Tokens(stake_per_round)
         ))
         .dim(),
         style("Make sure you back up your keys:").yellow().bold(),
@@ -198,16 +203,18 @@ fn prepare_depool_validator(
 ) -> Result<()> {
     use crate::contracts::*;
 
+    let currency = &app_config.currency().to_owned();
+
     let (mut steps, params) = match template {
-        Some(template) => prepare_new_depool(theme, dirs, Some(template))?,
+        Some(template) => prepare_new_depool(theme, dirs, currency, Some(template))?,
         None => match Select::with_theme(theme)
             .item("Deploy new DePool")
             .item("Use existing DePool")
             .default(0)
             .interact()?
         {
-            0 => prepare_new_depool(theme, dirs, None)?,
-            _ => prepare_existing_depool(theme, dirs)?,
+            0 => prepare_new_depool(theme, dirs, currency, None)?,
+            _ => prepare_existing_depool(theme, dirs, currency)?,
         },
     };
 
@@ -227,31 +234,21 @@ fn prepare_depool_validator(
     );
 
     if let Some(deployment) = params.deploy {
-        let strategy_fee = StrategyFactory::DEPLOYMENT_FEE;
-
-        let mut target_balance = deployment.validator_assurance as u128 * 2
+        let target_balance = deployment.validator_assurance as u128 * 2
             + Wallet::INITIAL_BALANCE
             + DePool::INITIAL_BALANCE;
-
-        let mut factory_deployment_note = "".to_owned();
-        if params.strategy_factory.is_some() {
-            target_balance += strategy_fee;
-            factory_deployment_note =
-                format!("\n  • {} EVER, strategy deployment fee", Ever(strategy_fee));
-        }
 
         println!(
             "\n{} {}{}",
             style("Required validator wallet balance:").green().bold(),
-            style(format!("{} EVER", Ever(target_balance))).bold(),
+            style(format!("{} {currency}", Tokens(target_balance))).bold(),
             style(format!(
-                "\n  • {} EVER, maintenance balance\
-                 \n  • {} EVER, DePool deployment fee\
-                 {factory_deployment_note}\
-                 \n  • 2 x {} EVER, stakes for each round",
-                Ever(Wallet::INITIAL_BALANCE),
-                Ever(DePool::INITIAL_BALANCE),
-                Ever(deployment.validator_assurance),
+                "\n  • {} {currency}, maintenance balance\
+                 \n  • {} {currency}, DePool deployment fee\
+                 \n  • 2 x {} {currency}, stakes for each round",
+                Tokens(Wallet::INITIAL_BALANCE),
+                Tokens(DePool::INITIAL_BALANCE),
+                Tokens(deployment.validator_assurance),
             ))
             .dim()
         );
@@ -270,6 +267,7 @@ fn prepare_depool_validator(
 fn prepare_new_depool(
     theme: &dyn Theme,
     dirs: &ProjectDirs,
+    currency: &str,
     template: Option<&TemplateValidatorDePool>,
 ) -> Result<(Steps, AppConfigValidatorDePool)> {
     let mut steps = Steps::new(2);
@@ -277,7 +275,7 @@ fn prepare_new_depool(
     // Prepare validator wallet
     steps.next("Creating validator wallet");
 
-    let (is_new_wallet, wallet_keypair) = KeysSelector {
+    let wallet_keypair = KeysSelector {
         theme,
         prompt: "Validator wallet",
         path: &dirs.validator_keys,
@@ -293,7 +291,7 @@ fn prepare_new_depool(
     steps.next("Creating DePool");
 
     // Generate depool keys
-    let (is_new_depool, depool_keypair) = KeysSelector {
+    let depool_keypair = KeysSelector {
         theme,
         prompt: "DePool",
         path: &dirs.depool_keys,
@@ -306,13 +304,13 @@ fn prepare_new_depool(
         Some(template) => template.depool_type,
         None => match Select::with_theme(theme)
             .with_prompt("Select DePool type")
-            .item("stEVER")
             .item("DePoolV3")
+            .item(format!("st{currency}"))
             .default(0)
             .interact()?
         {
-            0 => DePoolType::LATEST_STEVER,
-            _ => DePoolType::DefaultV3,
+            0 => DePoolType::DefaultV3,
+            _ => DePoolType::LATEST_STEVER,
         },
     };
 
@@ -327,15 +325,15 @@ fn prepare_new_depool(
             let stake = template.deploy.min_stake;
             anyhow::ensure!(
                 stake >= 10 * ONE_EVER as u64,
-                "Minimum stake is too small (< 10 EVER)"
+                "Minimum stake is too small (< 10 {currency})"
             );
             stake
         }
         None => Input::with_theme(theme)
-            .with_prompt("Minimum participant stake (EVER)")
+            .with_prompt(format!("Minimum participant stake ({currency})"))
             .default(DEFAULT_MIN_STAKE)
             .validate_with(|value: &u64| match *value {
-                x if x < 10 => Err("Minimum stake is too small (< 10 EVER)"),
+                x if x < 10 => Err(format!("Minimum stake is too small (< 10 {currency})")),
                 _ => Ok(()),
             })
             .interact_text()?
@@ -348,7 +346,7 @@ fn prepare_new_depool(
             let assurance = template.deploy.validator_assurance;
             anyhow::ensure!(
                 assurance >= 10 * ONE_EVER as u64,
-                "Too small validator assurance (< 10 EVER)"
+                "Too small validator assurance (< 10 {currency})"
             );
             anyhow::ensure!(
                 assurance >= min_stake,
@@ -357,12 +355,12 @@ fn prepare_new_depool(
             assurance
         }
         None => Input::with_theme(theme)
-            .with_prompt("Validator assurance (EVER)")
+            .with_prompt(format!("Validator assurance ({currency})"))
             .default(DEFAULT_VALIDATOR_ASSURANCE)
             .validate_with(|value: &u64| match *value {
-                x if x < 10 => Err("Too small validator assurance (< 10 EVER)"),
+                x if x < 10 => Err(format!("Too small validator assurance (< 10 {currency})")),
                 x if x.saturating_mul(ONE_EVER as u64) < min_stake => {
-                    Err("Validator assurance is less than minimum stake")
+                    Err("Validator assurance is less than minimum stake".to_owned())
                 }
                 _ => Ok(()),
             })
@@ -397,8 +395,7 @@ fn prepare_new_depool(
         depool: depool_address,
         depool_type,
         stake_factor: Some(stake_factor),
-        strategy_factory: None,
-        strategy: None,
+        cluster: None,
         deploy: Some(AppConfigDePoolDeploymentParams {
             min_stake,
             validator_assurance,
@@ -408,36 +405,19 @@ fn prepare_new_depool(
 
     // Configure stEVER strategies stuff
     if depool_type.is_stever() {
-        match template {
-            Some(template) => {
-                params.strategy_factory = Some(
-                    template
-                        .strategy_factory
-                        .clone()
-                        .unwrap_or(DEFAULT_STRATEGY_FACTORY.parse().unwrap()),
-                );
-
-                if !is_new_depool {
-                    params.strategy = template.strategy.clone();
-                }
-            }
+        let cluster = match template {
+            Some(template) => template
+                .cluster
+                .clone()
+                .context("cluster address must be specified")?,
             None => {
-                let strategy = if is_new_wallet || is_new_depool {
-                    // Always deploy new strategy is new keys were generated
-                    StrategyAction::DeployNew.run(theme)?
-                } else {
-                    // Allow specifying existing strategy otherwise
-                    let items = [StrategyAction::DeployNew, StrategyAction::SetExisting];
-                    let action = Select::with_theme(theme)
-                        .items(&items)
-                        .default(0)
-                        .interact()?;
-                    items[action].run(theme)?
-                };
-                params.strategy_factory = strategy.factory;
-                params.strategy = strategy.existing;
+                let AddressInput(cluster) = Input::with_theme(theme)
+                    .with_prompt(format!("Specify st{currency} cluster address"))
+                    .interact_text()?;
+                cluster
             }
-        }
+        };
+        params.cluster = Some(cluster);
     }
 
     // Done
@@ -447,13 +427,14 @@ fn prepare_new_depool(
 fn prepare_existing_depool(
     theme: &dyn Theme,
     dirs: &ProjectDirs,
+    currency: &str,
 ) -> Result<(Steps, AppConfigValidatorDePool)> {
     let mut steps = Steps::new(2);
 
     // Prepare validator wallet
     steps.next("Creating validator wallet");
 
-    let (_, wallet_keypair) = KeysSelector {
+    let wallet_keypair = KeysSelector {
         theme,
         prompt: "Validator wallet seed phrase",
         path: &dirs.validator_keys,
@@ -474,7 +455,7 @@ fn prepare_existing_depool(
         .interact_text()?;
 
     // Generate depool keys
-    let (_, depool_keypair) = KeysSelector {
+    let depool_keypair = KeysSelector {
         theme,
         prompt: "DePool seed phrase",
         path: &dirs.depool_keys,
@@ -496,21 +477,16 @@ fn prepare_existing_depool(
         depool: depool_address,
         depool_type,
         stake_factor: Some(stake_factor),
-        strategy_factory: None,
-        strategy: None,
+        cluster: None,
         deploy: None,
     };
 
     // Configure stEVER strategies stuff
     if depool_type.is_stever() {
-        let items = StrategyAction::all();
-        let action = Select::with_theme(theme)
-            .items(&items)
-            .default(0)
-            .interact()?;
-        let strategy = items[action].run(theme)?;
-        params.strategy_factory = strategy.factory;
-        params.strategy = strategy.existing;
+        let AddressInput(cluster) = Input::with_theme(theme)
+            .with_prompt(format!("Specify st{currency} cluster address"))
+            .interact_text()?;
+        params.cluster = Some(cluster);
     }
 
     // Done
@@ -570,57 +546,6 @@ fn configure_stake_factor(theme: &dyn Theme, template: Option<Option<u32>>) -> R
     })
 }
 
-selector_variant!(StrategyAction, {
-    Skip => "Leave as is",
-    DeployNew => "Deploy new stEVER DePool strategy",
-    SetExisting => "Set existing stEVER DePool strategy",
-});
-
-impl StrategyAction {
-    fn run(self, theme: &dyn Theme) -> Result<Strategy> {
-        let default_strategy_factory: ton_block::MsgAddressInt =
-            DEFAULT_STRATEGY_FACTORY.parse().unwrap();
-
-        Ok(match self {
-            Self::Skip => Strategy {
-                factory: None,
-                existing: None,
-            },
-            Self::DeployNew => {
-                let AddressInput(factory) = Input::with_theme(theme)
-                    .with_prompt("Specify stEVER strategy factory")
-                    .default(AddressInput(default_strategy_factory))
-                    .interact_text()?;
-
-                Strategy {
-                    factory: Some(factory),
-                    existing: None,
-                }
-            }
-            Self::SetExisting => {
-                println!(
-                    "NOTE: Specified strategy address must be deployed \
-                    for the current DePool"
-                );
-
-                let AddressInput(existing) = Input::with_theme(theme)
-                    .with_prompt("Specify strategy address")
-                    .interact_text()?;
-
-                Strategy {
-                    factory: None,
-                    existing: Some(existing),
-                }
-            }
-        })
-    }
-}
-
-struct Strategy {
-    factory: Option<ton_block::MsgAddressInt>,
-    existing: Option<ton_block::MsgAddressInt>,
-}
-
 struct KeysSelector<'a, P> {
     theme: &'a dyn Theme,
     prompt: &'a str,
@@ -629,32 +554,29 @@ struct KeysSelector<'a, P> {
 }
 
 impl<P: AsRef<Path>> KeysSelector<'_, P> {
-    fn interact(
-        self,
-        overwrite_from_template: Option<bool>,
-    ) -> Result<(bool, ed25519_dalek::Keypair)> {
+    fn interact(self, overwrite_from_template: Option<bool>) -> Result<ed25519_dalek::Keypair> {
         match overwrite_from_template {
             Some(overwrite) => self.interact_from_template(overwrite),
             None => self.interact_with_cli(),
         }
     }
 
-    fn interact_from_template(self, overwrite: bool) -> Result<(bool, ed25519_dalek::Keypair)> {
+    fn interact_from_template(self, overwrite: bool) -> Result<ed25519_dalek::Keypair> {
         let path = self.path.as_ref();
         let exists = path.exists();
         anyhow::ensure!(exists || self.allow_new, "Keys not found");
 
         Ok(if exists && !overwrite {
             let keys = StoredKeys::load(path).context("failed to load existing keys")?;
-            (false, keys.as_keypair())
+            keys.as_keypair()
         } else {
             let keys = StoredKeys::generate()?;
             keys.store(path)?;
-            (true, keys.as_keypair())
+            keys.as_keypair()
         })
     }
 
-    fn interact_with_cli(self) -> Result<(bool, ed25519_dalek::Keypair)> {
+    fn interact_with_cli(self) -> Result<ed25519_dalek::Keypair> {
         selector_variant!(Action, {
             Existing => "Use existing keys",
             Generate => "Generate new keys",
@@ -686,7 +608,7 @@ impl<P: AsRef<Path>> KeysSelector<'_, P> {
         select.items(&items).default(0);
 
         // Try asking user until he selects a correct variant
-        let (is_new, stored_keys) = loop {
+        let stored_keys = loop {
             // Determine input action
             let action = if items.len() > 1 {
                 items[select.interact()?]
@@ -697,7 +619,7 @@ impl<P: AsRef<Path>> KeysSelector<'_, P> {
             // Do action
             match action {
                 Action::Existing => match StoredKeys::load(path) {
-                    Ok(keys) => break (false, keys),
+                    Ok(keys) => break keys,
                     Err(e) => {
                         print_error(format!("failed to load existing keys: {e:?}"));
                         continue;
@@ -708,7 +630,7 @@ impl<P: AsRef<Path>> KeysSelector<'_, P> {
                     if !store_keys(&keys)? {
                         continue;
                     }
-                    break (true, keys);
+                    break keys;
                 }
                 Action::Import => {
                     let seed: SeedOrSecretInput = Input::with_theme(self.theme)
@@ -718,12 +640,12 @@ impl<P: AsRef<Path>> KeysSelector<'_, P> {
                     if !store_keys(&keys)? {
                         continue;
                     }
-                    break (false, keys);
+                    break keys;
                 }
             }
         };
 
-        Ok((is_new, stored_keys.as_keypair()))
+        Ok(stored_keys.as_keypair())
     }
 }
 

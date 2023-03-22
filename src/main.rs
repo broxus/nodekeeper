@@ -41,6 +41,7 @@ mod exporter;
 mod network;
 mod util;
 mod validator;
+mod currency;
 
 #[tokio::main]
 async fn main() -> Result<()> {

@@ -22,9 +22,9 @@ pub async fn exec(command: &mut Command) -> Result<()> {
     Ok(())
 }
 
-pub struct Ever<T>(pub T);
+pub struct Tokens<T>(pub T);
 
-impl<T: Into<u128> + Copy> std::fmt::Display for Ever<T> {
+impl<T: Into<u128> + Copy> std::fmt::Display for Tokens<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let num: u128 = self.0.into();
         let int = num / 1000000000;

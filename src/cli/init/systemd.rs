@@ -149,7 +149,7 @@ pub async fn start_services(
 macro_rules! validator_service {
     () => {
         r#"[Unit]
-Description=Everscale Validator Node
+Description=Validator Node
 After=network.target
 StartLimitIntervalSec=0
 
@@ -170,7 +170,7 @@ WantedBy=multi-user.target
 macro_rules! validator_manager_service {
     () => {
         r#"[Unit]
-Description=Everscale Validator Manager
+Description=Validator Manager
 After=network.target
 StartLimitIntervalSec=0
 
@@ -179,7 +179,7 @@ Type=simple
 Restart=always
 RestartSec=1
 User={user}
-ExecStart={stever_binary} --root {root_dir} validator
+ExecStart={nodekeeper_binary} --root {root_dir} validator
 
 [Install]
 WantedBy=multi-user.target
@@ -214,7 +214,7 @@ impl ProjectDirs {
         let validator_manager_service = format!(
             validator_manager_service!(),
             user = user,
-            stever_binary = current_exe.display(),
+            nodekeeper_binary = current_exe.display(),
             root_dir = root_dir.display(),
         );
         std::fs::write(&self.validator_manager_service, validator_manager_service)
