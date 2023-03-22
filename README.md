@@ -1,7 +1,7 @@
 ## nodekeeper &emsp; [![rust-version-badge]][rust-version-link] [![workflow-badge]][workflow-link]
 
 [rust-version-badge]: https://img.shields.io/badge/rustc-1.67+-lightgray.svg
-[rust-version-alt]: https://blog.rust-lang.org/2023/01/26/Rust-1.67.0.html
+[rust-version-link]: https://blog.rust-lang.org/2023/01/26/Rust-1.67.0.html
 [workflow-badge]: https://img.shields.io/github/actions/workflow/status/broxus/nodekeeper/master.yml?branch=master
 [workflow-link]: https://github.com/broxus/nodekeeper/actions?query=workflow%3Amaster
 

@@ -112,7 +112,7 @@ fn prepare_single_validator(
 
     // Prepare validator wallet
     steps.next("Creating validator wallet");
-    let (_, keypair) = KeysSelector {
+    let keypair = KeysSelector {
         theme,
         prompt: "Validator wallet",
         path: &dirs.validator_keys,
@@ -234,7 +234,7 @@ fn prepare_depool_validator(
     );
 
     if let Some(deployment) = params.deploy {
-        let mut target_balance = deployment.validator_assurance as u128 * 2
+        let target_balance = deployment.validator_assurance as u128 * 2
             + Wallet::INITIAL_BALANCE
             + DePool::INITIAL_BALANCE;
 
@@ -275,7 +275,7 @@ fn prepare_new_depool(
     // Prepare validator wallet
     steps.next("Creating validator wallet");
 
-    let (is_new_wallet, wallet_keypair) = KeysSelector {
+    let wallet_keypair = KeysSelector {
         theme,
         prompt: "Validator wallet",
         path: &dirs.validator_keys,
@@ -291,7 +291,7 @@ fn prepare_new_depool(
     steps.next("Creating DePool");
 
     // Generate depool keys
-    let (is_new_depool, depool_keypair) = KeysSelector {
+    let depool_keypair = KeysSelector {
         theme,
         prompt: "DePool",
         path: &dirs.depool_keys,
@@ -304,13 +304,13 @@ fn prepare_new_depool(
         Some(template) => template.depool_type,
         None => match Select::with_theme(theme)
             .with_prompt("Select DePool type")
-            .item(format!("st{currency}"))
             .item("DePoolV3")
+            .item(format!("st{currency}"))
             .default(0)
             .interact()?
         {
-            0 => DePoolType::LATEST_STEVER,
-            _ => DePoolType::DefaultV3,
+            0 => DePoolType::DefaultV3,
+            _ => DePoolType::LATEST_STEVER,
         },
     };
 
@@ -434,7 +434,7 @@ fn prepare_existing_depool(
     // Prepare validator wallet
     steps.next("Creating validator wallet");
 
-    let (_, wallet_keypair) = KeysSelector {
+    let wallet_keypair = KeysSelector {
         theme,
         prompt: "Validator wallet seed phrase",
         path: &dirs.validator_keys,
@@ -455,7 +455,7 @@ fn prepare_existing_depool(
         .interact_text()?;
 
     // Generate depool keys
-    let (_, depool_keypair) = KeysSelector {
+    let depool_keypair = KeysSelector {
         theme,
         prompt: "DePool seed phrase",
         path: &dirs.depool_keys,
@@ -546,11 +546,6 @@ fn configure_stake_factor(theme: &dyn Theme, template: Option<Option<u32>>) -> R
     })
 }
 
-struct Strategy {
-    factory: Option<ton_block::MsgAddressInt>,
-    existing: Option<ton_block::MsgAddressInt>,
-}
-
 struct KeysSelector<'a, P> {
     theme: &'a dyn Theme,
     prompt: &'a str,
@@ -559,32 +554,29 @@ struct KeysSelector<'a, P> {
 }
 
 impl<P: AsRef<Path>> KeysSelector<'_, P> {
-    fn interact(
-        self,
-        overwrite_from_template: Option<bool>,
-    ) -> Result<(bool, ed25519_dalek::Keypair)> {
+    fn interact(self, overwrite_from_template: Option<bool>) -> Result<ed25519_dalek::Keypair> {
         match overwrite_from_template {
             Some(overwrite) => self.interact_from_template(overwrite),
             None => self.interact_with_cli(),
         }
     }
 
-    fn interact_from_template(self, overwrite: bool) -> Result<(bool, ed25519_dalek::Keypair)> {
+    fn interact_from_template(self, overwrite: bool) -> Result<ed25519_dalek::Keypair> {
         let path = self.path.as_ref();
         let exists = path.exists();
         anyhow::ensure!(exists || self.allow_new, "Keys not found");
 
         Ok(if exists && !overwrite {
             let keys = StoredKeys::load(path).context("failed to load existing keys")?;
-            (false, keys.as_keypair())
+            keys.as_keypair()
         } else {
             let keys = StoredKeys::generate()?;
             keys.store(path)?;
-            (true, keys.as_keypair())
+            keys.as_keypair()
         })
     }
 
-    fn interact_with_cli(self) -> Result<(bool, ed25519_dalek::Keypair)> {
+    fn interact_with_cli(self) -> Result<ed25519_dalek::Keypair> {
         selector_variant!(Action, {
             Existing => "Use existing keys",
             Generate => "Generate new keys",
@@ -616,7 +608,7 @@ impl<P: AsRef<Path>> KeysSelector<'_, P> {
         select.items(&items).default(0);
 
         // Try asking user until he selects a correct variant
-        let (is_new, stored_keys) = loop {
+        let stored_keys = loop {
             // Determine input action
             let action = if items.len() > 1 {
                 items[select.interact()?]
@@ -627,7 +619,7 @@ impl<P: AsRef<Path>> KeysSelector<'_, P> {
             // Do action
             match action {
                 Action::Existing => match StoredKeys::load(path) {
-                    Ok(keys) => break (false, keys),
+                    Ok(keys) => break keys,
                     Err(e) => {
                         print_error(format!("failed to load existing keys: {e:?}"));
                         continue;
@@ -638,7 +630,7 @@ impl<P: AsRef<Path>> KeysSelector<'_, P> {
                     if !store_keys(&keys)? {
                         continue;
                     }
-                    break (true, keys);
+                    break keys;
                 }
                 Action::Import => {
                     let seed: SeedOrSecretInput = Input::with_theme(self.theme)
@@ -648,12 +640,12 @@ impl<P: AsRef<Path>> KeysSelector<'_, P> {
                     if !store_keys(&keys)? {
                         continue;
                     }
-                    break (false, keys);
+                    break keys;
                 }
             }
         };
 
-        Ok((is_new, stored_keys.as_keypair()))
+        Ok(stored_keys.as_keypair())
     }
 }
 

@@ -1,8 +1,10 @@
+pub use cluster::Cluster;
 pub use depool::DePool;
 pub use elector::Elector;
 pub use strategy::Strategy;
 pub use wallet::Wallet;
 
+pub mod cluster;
 pub mod depool;
 pub mod elector;
 pub mod strategy;

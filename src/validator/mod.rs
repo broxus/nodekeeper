@@ -491,8 +491,11 @@ impl AppConfigValidatorDePool {
         if self.depool_type.is_stever() {
             let cluster = self
                 .cluster
-                .as_ref()
+                .clone()
                 .context("cluster address must be specified in the config")?;
+            let cluster = Cluster::new(cluster, ctx.subscription.clone());
+
+            let strategy = cluster.wait_for_depool_strategy(&self.depool).await?;
 
             let depool_state = depool.get_state().await?;
 
@@ -505,67 +508,16 @@ impl AppConfigValidatorDePool {
             if allowed_participants.len() < 2 {
                 let wallet = wallet.get_or_init()?;
 
-                let subscription = ctx.subscription.clone();
-                let strategy = if let Some(address) = self.strategy.clone() {
-                    let strategy = Strategy::new(address, subscription);
-                    let details = strategy
-                        .get_details()
-                        .await
-                        .context("failed to get stEVER strategy details")?;
+                // Prevent shutdown during the operation
+                let _guard = ctx.guard.lock();
 
-                    anyhow::ensure!(
-                        &details.depool == depool.address(),
-                        "strategy was deployed for the different DePool"
-                    );
-
-                    Some(strategy.address)
-                } else if let Some(address) = self.strategy_factory.clone() {
-                    let factory = StrategyFactory::new(address, subscription);
-                    factory
-                        .get_details()
-                        .await
-                        .context("failed to get stEVER strategy factory details")?;
-
-                    // Prepare deployment message
-                    let deployment_message = factory.deploy_strategy(depool.address())?;
-
-                    // Wait until there are enough funds on the validator wallet
-                    wallet
-                        .wait_for_balance(deployment_message.amount + ONE_EVER)
-                        .await?;
-
-                    // Prevent shutdown during the operation
-                    let _guard = ctx.guard.lock();
-
-                    // Send an internal message to the factory
-                    tracing::info!("deploying stEVER strategy");
-                    let strategy = wallet
-                        .call(deployment_message)
-                        .await
-                        .and_then(StrategyFactory::extract_strategy_address)
-                        .context("failed to deploy stEVER DePool strategy")?;
-                    tracing::info!(%strategy, "successfully deployed stEVER strategy");
-
-                    Some(strategy)
-                } else {
-                    tracing::warn!(
-                        "neither a strategy factory nor an explicit strategy was specified"
-                    );
-                    None
-                };
-
-                if let Some(strategy) = strategy {
-                    // Prevent shutdown during the operation
-                    let _guard = ctx.guard.lock();
-
-                    // Set strategy as an allowed participant
-                    tracing::info!(%strategy, "setting DePool strategy");
-                    wallet
-                        .call(depool.set_allowed_participant(&strategy)?)
-                        .await
-                        .context("failed to set update DePool strategy")?;
-                    tracing::info!(%strategy, "DePool strategy successfully updated");
-                }
+                // Set strategy as an allowed participant
+                tracing::info!(%strategy, "setting DePool strategy");
+                wallet
+                    .call(depool.set_allowed_participant(&strategy)?)
+                    .await
+                    .context("failed to set DePool strategy")?;
+                tracing::info!(%strategy, "DePool strategy successfully updated");
             }
         }
 
@@ -896,6 +848,32 @@ impl Wallet {
                     last_balance = Some(balance);
                 }
             }
+            tokio::time::sleep(interval).await;
+        }
+    }
+}
+
+impl Cluster {
+    async fn wait_for_depool_strategy(
+        &self,
+        depool: &ton_block::MsgAddressInt,
+    ) -> Result<ton_block::MsgAddressInt> {
+        let interval = Duration::from_secs(60);
+
+        let mut first = true;
+        loop {
+            if let Some(strategy) = self.find_deployed_strategy_for_depool(depool).await? {
+                return Ok(strategy);
+            }
+
+            if std::mem::take(&mut first) {
+                tracing::info!(
+                    cluster = %self.address,
+                    depool = %depool,
+                    "waiting for the strategy to be added to the cluster for the DePool",
+                );
+            }
+
             tokio::time::sleep(interval).await;
         }
     }

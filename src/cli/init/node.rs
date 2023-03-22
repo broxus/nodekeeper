@@ -867,8 +867,6 @@ async fn build_node<P: AsRef<Path>>(target: P, features: &[String]) -> Result<Pa
 
 #[cfg(not(feature = "packaged"))]
 fn check_systemd_service(dirs: &ProjectDirs) -> Result<()> {
-    use std::ffi::OsStr;
-
     if dirs.validator_service.exists() && dirs.validator_manager_service.exists() {
         // Do nothing if all services exist
         return Ok(());
@@ -876,12 +874,11 @@ fn check_systemd_service(dirs: &ProjectDirs) -> Result<()> {
 
     // Get current exe path
     let current_exe = std::env::current_exe()?;
-    let current_exe = current_exe
-        .file_name()
-        .unwrap_or_else(|| OsStr::new("nodekeeper"))
-        .to_string_lossy();
 
-    println!("\nTo configure systemd services, run:\n    sudo $(which {current_exe}) init systemd");
+    println!(
+        "\nTo configure systemd services, run:\n    sudo {} init systemd",
+        current_exe.display()
+    );
     Ok(())
 }
 
