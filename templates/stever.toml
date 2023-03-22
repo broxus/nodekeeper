@@ -12,3 +12,6 @@ depool_type = "stever_v2"
 min_stake = "10000000000"              # 10 EVER
 validator_assurance = "50000000000000" # 50000 EVER
 participant_reward_fraction = 95
+
+# Main cluster, must be replaced with required
+cluster = "0:86ea048f599734f266d3267a66941cd218dfb8120e4eca8cc055fdba8413fade"

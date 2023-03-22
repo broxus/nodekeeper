@@ -36,12 +36,12 @@ mod cli;
 mod config;
 mod contracts;
 mod crypto;
+mod currency;
 mod dirs;
 mod exporter;
 mod network;
 mod util;
 mod validator;
-mod currency;
 
 #[tokio::main]
 async fn main() -> Result<()> {

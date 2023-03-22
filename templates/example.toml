@@ -80,6 +80,8 @@ min_stake = "10000000000"
 validator_assurance = "50000000000000"
 # Participant reward fraction, 1..=95
 participant_reward_fraction = 95
+# stEVER cluster address
+cluster = "0:86ea048f599734f266d3267a66941cd218dfb8120e4eca8cc055fdba8413fade"
 
 ## OPTIONAL:
 
@@ -89,5 +91,3 @@ overwrite = false
 overwrite_validator_keys = false
 # Whether to overwrite existing DePool keys. Default: `false`.
 overwrite_depool_keys = false
-# Strategy factory address for stEVER. Default: current mainnet factory.
-# strategy_factory = "0:519a1205bd021e5e0aa4b64f5ab689bc383efb4f94f283eac78926da71cfe100"
