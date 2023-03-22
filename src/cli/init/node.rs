@@ -881,7 +881,7 @@ fn check_systemd_service(dirs: &ProjectDirs) -> Result<()> {
         .unwrap_or_else(|| OsStr::new("nodekeeper"))
         .to_string_lossy();
 
-    println!("\nTo configure systemd services, run:\n    sudo {current_exe} init systemd");
+    println!("\nTo configure systemd services, run:\n    sudo $(which {current_exe}) init systemd");
     Ok(())
 }
 

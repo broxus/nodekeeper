@@ -20,9 +20,6 @@ const DEFAULT_MIN_STAKE: u64 = 10;
 const DEFAULT_VALIDATOR_ASSURANCE: u64 = 10_000;
 const DEFAULT_PARTICIPANT_REWARD_FRACTION: u8 = 95;
 
-const DEFAULT_STRATEGY_FACTORY: &str =
-    "0:519a1205bd021e5e0aa4b64f5ab689bc383efb4f94f283eac78926da71cfe100";
-
 #[derive(FromArgs)]
 /// Deploys contracts required for validation
 #[argh(subcommand, name = "contracts")]
@@ -217,7 +214,7 @@ fn prepare_depool_validator(
             .interact()?
         {
             0 => prepare_new_depool(theme, dirs, currency, None)?,
-            _ => prepare_existing_depool(theme, dirs)?,
+            _ => prepare_existing_depool(theme, dirs, currency)?,
         },
     };
 
@@ -237,20 +234,9 @@ fn prepare_depool_validator(
     );
 
     if let Some(deployment) = params.deploy {
-        let strategy_fee = StrategyFactory::DEPLOYMENT_FEE;
-
         let mut target_balance = deployment.validator_assurance as u128 * 2
             + Wallet::INITIAL_BALANCE
             + DePool::INITIAL_BALANCE;
-
-        let mut factory_deployment_note = "".to_owned();
-        if params.strategy_factory.is_some() {
-            target_balance += strategy_fee;
-            factory_deployment_note = format!(
-                "\n  • {} {currency}, strategy deployment fee",
-                Tokens(strategy_fee)
-            );
-        }
 
         println!(
             "\n{} {}{}",
@@ -259,7 +245,6 @@ fn prepare_depool_validator(
             style(format!(
                 "\n  • {} {currency}, maintenance balance\
                  \n  • {} {currency}, DePool deployment fee\
-                 {factory_deployment_note}\
                  \n  • 2 x {} {currency}, stakes for each round",
                 Tokens(Wallet::INITIAL_BALANCE),
                 Tokens(DePool::INITIAL_BALANCE),
@@ -410,8 +395,7 @@ fn prepare_new_depool(
         depool: depool_address,
         depool_type,
         stake_factor: Some(stake_factor),
-        strategy_factory: None,
-        strategy: None,
+        cluster: None,
         deploy: Some(AppConfigDePoolDeploymentParams {
             min_stake,
             validator_assurance,
@@ -421,36 +405,19 @@ fn prepare_new_depool(
 
     // Configure stEVER strategies stuff
     if depool_type.is_stever() {
-        match template {
-            Some(template) => {
-                params.strategy_factory = Some(
-                    template
-                        .strategy_factory
-                        .clone()
-                        .unwrap_or(DEFAULT_STRATEGY_FACTORY.parse().unwrap()),
-                );
-
-                if !is_new_depool {
-                    params.strategy = template.strategy.clone();
-                }
-            }
+        let cluster = match template {
+            Some(template) => template
+                .cluster
+                .clone()
+                .context("cluster address must be specified")?,
             None => {
-                let strategy = if is_new_wallet || is_new_depool {
-                    // Always deploy new strategy is new keys were generated
-                    StrategyAction::DeployNew.run(theme)?
-                } else {
-                    // Allow specifying existing strategy otherwise
-                    let items = [StrategyAction::DeployNew, StrategyAction::SetExisting];
-                    let action = Select::with_theme(theme)
-                        .items(&items)
-                        .default(0)
-                        .interact()?;
-                    items[action].run(theme)?
-                };
-                params.strategy_factory = strategy.factory;
-                params.strategy = strategy.existing;
+                let AddressInput(cluster) = Input::with_theme(theme)
+                    .with_prompt(format!("Specify st{currency} cluster address"))
+                    .interact_text()?;
+                cluster
             }
-        }
+        };
+        params.cluster = Some(cluster);
     }
 
     // Done
@@ -460,6 +427,7 @@ fn prepare_new_depool(
 fn prepare_existing_depool(
     theme: &dyn Theme,
     dirs: &ProjectDirs,
+    currency: &str,
 ) -> Result<(Steps, AppConfigValidatorDePool)> {
     let mut steps = Steps::new(2);
 
@@ -509,21 +477,16 @@ fn prepare_existing_depool(
         depool: depool_address,
         depool_type,
         stake_factor: Some(stake_factor),
-        strategy_factory: None,
-        strategy: None,
+        cluster: None,
         deploy: None,
     };
 
     // Configure stEVER strategies stuff
     if depool_type.is_stever() {
-        let items = StrategyAction::all();
-        let action = Select::with_theme(theme)
-            .items(&items)
-            .default(0)
-            .interact()?;
-        let strategy = items[action].run(theme)?;
-        params.strategy_factory = strategy.factory;
-        params.strategy = strategy.existing;
+        let AddressInput(cluster) = Input::with_theme(theme)
+            .with_prompt(format!("Specify st{currency} cluster address"))
+            .interact_text()?;
+        params.cluster = Some(cluster);
     }
 
     // Done
@@ -581,52 +544,6 @@ fn configure_stake_factor(theme: &dyn Theme, template: Option<Option<u32>>) -> R
             .map(to_factor_repr)
             .map(clamp_stake_factor)?,
     })
-}
-
-selector_variant!(StrategyAction, {
-    Skip => "Leave as is",
-    DeployNew => "Deploy new stEVER DePool strategy",
-    SetExisting => "Set existing stEVER DePool strategy",
-});
-
-impl StrategyAction {
-    fn run(self, theme: &dyn Theme) -> Result<Strategy> {
-        let default_strategy_factory: ton_block::MsgAddressInt =
-            DEFAULT_STRATEGY_FACTORY.parse().unwrap();
-
-        Ok(match self {
-            Self::Skip => Strategy {
-                factory: None,
-                existing: None,
-            },
-            Self::DeployNew => {
-                let AddressInput(factory) = Input::with_theme(theme)
-                    .with_prompt("Specify stEVER strategy factory")
-                    .default(AddressInput(default_strategy_factory))
-                    .interact_text()?;
-
-                Strategy {
-                    factory: Some(factory),
-                    existing: None,
-                }
-            }
-            Self::SetExisting => {
-                println!(
-                    "NOTE: Specified strategy address must be deployed \
-                    for the current DePool"
-                );
-
-                let AddressInput(existing) = Input::with_theme(theme)
-                    .with_prompt("Specify strategy address")
-                    .interact_text()?;
-
-                Strategy {
-                    factory: None,
-                    existing: Some(existing),
-                }
-            }
-        })
-    }
 }
 
 struct Strategy {

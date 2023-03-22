@@ -489,6 +489,11 @@ impl AppConfigValidatorDePool {
 
         // Handle stEVER depool case
         if self.depool_type.is_stever() {
+            let cluster = self
+                .cluster
+                .as_ref()
+                .context("cluster address must be specified in the config")?;
+
             let depool_state = depool.get_state().await?;
 
             // Get allowed participants

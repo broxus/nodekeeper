@@ -155,13 +155,7 @@ pub struct AppConfigValidatorDePool {
         with = "serde_optional_string",
         skip_serializing_if = "Option::is_none"
     )]
-    pub strategy_factory: Option<ton_block::MsgAddressInt>,
-    #[serde(
-        default,
-        with = "serde_optional_string",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub strategy: Option<ton_block::MsgAddressInt>,
+    pub cluster: Option<ton_block::MsgAddressInt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deploy: Option<AppConfigDePoolDeploymentParams>,
 }
