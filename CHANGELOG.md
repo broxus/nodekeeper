@@ -1,3 +1,15 @@
+# 0.2.0 (2023-03-24)
+
+### Added
+
+- Added support for the new stEVER flow.
+- Detect currency based on global config.
+
+### Changed
+
+- Renamed tool to `nodekeeper`.
+- Renamed `systemd` services to `validator` and `validator-manager`.
+
 # 0.1.5 (2023-03-16)
 
 ### Added
