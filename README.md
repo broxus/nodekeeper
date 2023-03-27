@@ -28,15 +28,17 @@ All-in-one node management tool.
   # Install the tool
   sudo apt update
   sudo apt install nodekeeper
+
+  # Add current user to the nodekeeper group
+  sudo usermod -a -G nodekeeper $USER
+  # Update groups cache (you can just relogin instead)
+  newgrp nodekeeper
   ```
 
 * Using `cargo install`
   ```bash
-  # Install deps for this app
-  sudo apt install pkg-config libssl-dev
-
   # Install deps for the node
-  sudo apt install libzstd-dev libclang-dev libtcmalloc-minimal4 libprotobuf-dev libgoogle-perftools-dev
+  sudo apt install curl pkg-config libssl-dev libzstd-dev libclang-dev libtcmalloc-minimal4 libprotobuf-dev libgoogle-perftools-dev
 
   # Install the app
   cargo install --locked --git https://github.com/broxus/nodekeeper
@@ -51,11 +53,6 @@ All-in-one node management tool.
 
 For Debian installation:
 ```bash
-# Add current user to the nodekeeper group
-sudo usermod -a -G nodekeeper $USER
-# Update groups cache (you can just relogin instead)
-newgrp nodekeeper
-
 # Install Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
