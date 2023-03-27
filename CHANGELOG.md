@@ -1,3 +1,9 @@
+# 0.2.2 (2023-03-27)
+
+### Fixed
+
+- Fixed `statvfs` for the newly created node.
+
 # 0.2.1 (2023-03-27)
 
 ### Added

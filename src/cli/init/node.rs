@@ -698,6 +698,7 @@ fn setup_node_config_paths(
     let old_path = if let Some(db_path) = node_config.get_internal_db_path()? {
         if template.is_none() && db_path != PathBuf::from(DB_PATH_FALLBACK) {
             dirs.store_node_config(node_config)?;
+            std::fs::create_dir_all(db_path)?;
             return Ok(());
         }
         db_path
@@ -726,6 +727,9 @@ fn setup_node_config_paths(
                 .into()
         }
     };
+
+    // Ensure that db directory exists
+    std::fs::create_dir_all(&path)?;
 
     // Update and save node config
     node_config.set_internal_db_path(&path)?;
@@ -927,11 +931,15 @@ fn check_resources(node_config: &NodeConfig) -> Result<()> {
     }));
 
     if let Some(node_db) = node_config.get_internal_db_path()? {
-        let stats = system::statvfs(node_db).context("failed to check node DB disk usage")?;
-        let disk = stats.available_space;
-        entries.push(make_entry("Disk", format_gb(disk), || {
-            (disk < SUGGESTED_DISK).then(|| format_gb(SUGGESTED_DISK))
-        }));
+        match system::statvfs(node_db) {
+            Ok(stats) => {
+                let disk = stats.available_space;
+                entries.push(make_entry("Disk", format_gb(disk), || {
+                    (disk < SUGGESTED_DISK).then(|| format_gb(SUGGESTED_DISK))
+                }));
+            }
+            Err(e) => print_error(format!("failed to check node DB disk usage: {e:?}")),
+        }
     }
 
     let mut without_warnings = true;
