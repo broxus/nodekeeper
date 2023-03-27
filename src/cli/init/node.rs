@@ -14,13 +14,8 @@ use tokio::process::Command;
 use super::Template;
 use crate::cli::{CliContext, ProjectDirs};
 use crate::config::*;
+use crate::defaults;
 use crate::util::*;
-
-const DEFAULT_CONTROL_PORT: u16 = 5031;
-const DEFAULT_LOCAL_ADNL_PORT: u16 = 0;
-const DEFAULT_ADNL_PORT: u16 = 30100;
-
-pub const DEFAULT_NODE_REPO: &str = "https://github.com/tonlabs/ever-node.git";
 
 #[derive(FromArgs)]
 /// Prepares configs and binaries
@@ -81,7 +76,7 @@ impl Cmd {
 
         // Clone and build the node
         steps.next("Preparing binary");
-        if !setup_binary(theme, dirs, template, self.rebuild).await? {
+        if !setup_binary(theme, dirs, &app_config, template, self.rebuild).await? {
             return Ok(());
         }
 
@@ -90,6 +85,9 @@ impl Cmd {
 
         #[cfg(not(feature = "packaged"))]
         check_systemd_service(dirs)?;
+
+        // Check cpu/memory/disk
+        check_resources(&node_config)?;
 
         Ok(())
     }
@@ -295,7 +293,7 @@ fn setup_control_server(
     // Compute default control port
     let control_port = node_config
         .get_suggested_control_port()
-        .unwrap_or(DEFAULT_CONTROL_PORT);
+        .unwrap_or(defaults::DEFAULT_CONTROL_PORT);
 
     // Check current configs state
     match (&mut app_config.control, node_config.get_control_server()?) {
@@ -563,7 +561,7 @@ async fn setup_adnl(
     // Compute default adnl port
     let adnl_port = node_config
         .get_suggested_adnl_port()
-        .unwrap_or(DEFAULT_ADNL_PORT);
+        .unwrap_or(defaults::DEFAULT_ADNL_PORT);
 
     // Get our public ip
     let mut public_ip = public_ip::addr_v4().await;
@@ -628,7 +626,7 @@ async fn setup_adnl(
         (None, Some(adnl_node)) => {
             // Create client config
             app_config.adnl = Some(AppConfigAdnl {
-                client_port: DEFAULT_LOCAL_ADNL_PORT,
+                client_port: defaults::DEFAULT_LOCAL_ADNL_PORT,
                 server_address: adnl_node.ip_address,
                 server_pubkey: adnl_node.overlay_pubkey()?,
                 zerostate_file_hash,
@@ -671,7 +669,7 @@ async fn setup_adnl(
             node_config.set_adnl_node(&adnl_node)?;
 
             app_config.adnl = Some(AppConfigAdnl {
-                client_port: DEFAULT_LOCAL_ADNL_PORT,
+                client_port: defaults::DEFAULT_LOCAL_ADNL_PORT,
                 server_address: adnl_node.ip_address,
                 server_pubkey: adnl_node.overlay_pubkey()?,
                 zerostate_file_hash,
@@ -742,6 +740,7 @@ fn setup_node_config_paths(
 async fn setup_binary(
     theme: &dyn Theme,
     dirs: &ProjectDirs,
+    app_config: &AppConfig,
     template: &Option<Template>,
     force: bool,
 ) -> Result<bool> {
@@ -767,7 +766,7 @@ async fn setup_binary(
             // Ask for the node repo and features
             let args: String = Input::with_theme(theme)
                 .with_prompt("Node repo URL and features")
-                .with_initial_text(DEFAULT_NODE_REPO)
+                .with_initial_text(app_config.node_repo())
                 .interact_text()?;
 
             // Parse args:
@@ -840,7 +839,7 @@ async fn build_node<P: AsRef<Path>>(target: P, features: &[String]) -> Result<Pa
     if let Err(e) = exec(Command::new("cargo").arg("-V")).await {
         print_error(
             "Failed to check `cargo` version. Rust is not installed properly.\n  \
-               Please use the following command to install:\n\n\
+               Please use the following command to install:\n  \
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh\n",
         );
         return Err(e);
@@ -876,9 +875,83 @@ fn check_systemd_service(dirs: &ProjectDirs) -> Result<()> {
     let current_exe = std::env::current_exe()?;
 
     println!(
-        "\nTo configure systemd services, run:\n    sudo {} init systemd",
+        "\nTo configure systemd services, run:\n  sudo {} init systemd",
         current_exe.display()
     );
+    Ok(())
+}
+
+fn check_resources(node_config: &NodeConfig) -> Result<()> {
+    use console::style;
+    use sysinfo::{System, SystemExt};
+
+    fn format_gb(bytes: u64) -> String {
+        let gb = (bytes / (1 << 20)) as f64 / 1024.0f64;
+        format!("{:.1} GB", gb)
+    }
+
+    fn make_entry<D, F, R>(name: &str, value: D, f: F) -> (bool, String)
+    where
+        D: std::fmt::Display,
+        F: FnOnce() -> Option<R>,
+        R: std::fmt::Display,
+    {
+        if let Some(r) = f() {
+            let res = format!(
+                "{name}: {value} {}",
+                style(format!("(recommended {r})")).yellow()
+            );
+            (false, res)
+        } else {
+            (true, format!("{name}: {value}"))
+        }
+    }
+
+    const SUGGESTED_CORE_COUNT: usize = 12;
+    const SUGGESTED_MEMORY: u64 = 30 << 30;
+    const SUGGESTED_DISK: u64 = 100 << 30;
+
+    let mut system = System::new_all();
+    system.refresh_all();
+
+    let mut entries = Vec::new();
+
+    let vcpu = system.cpus().len();
+    entries.push(make_entry("vCPU", vcpu, || {
+        (vcpu < SUGGESTED_CORE_COUNT).then_some(SUGGESTED_CORE_COUNT)
+    }));
+
+    let memory = system.total_memory();
+    entries.push(make_entry("Memory", format_gb(memory), || {
+        (memory < SUGGESTED_MEMORY).then(|| format_gb(SUGGESTED_MEMORY))
+    }));
+
+    if let Some(node_db) = node_config.get_internal_db_path()? {
+        let stats = system::statvfs(node_db).context("failed to check node DB disk usage")?;
+        let disk = stats.available_space;
+        entries.push(make_entry("Disk", format_gb(disk), || {
+            (disk < SUGGESTED_DISK).then(|| format_gb(SUGGESTED_DISK))
+        }));
+    }
+
+    let mut without_warnings = true;
+    println!("\nSystem info:");
+    for (is_ok, item) in entries {
+        without_warnings &= is_ok;
+        println!("  • {item}");
+    }
+
+    if !without_warnings {
+        println!(
+            "{}",
+            style(
+                "\nThe system configuration does not meet the recommended host requirements.\
+                \nThe node may be unstable or not work at all."
+            )
+            .yellow()
+        );
+    }
+
     Ok(())
 }
 

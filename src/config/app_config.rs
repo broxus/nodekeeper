@@ -10,7 +10,7 @@ use broxus_util::{
 use everscale_crypto::ed25519;
 use serde::{Deserialize, Serialize};
 
-use crate::currency;
+use crate::defaults;
 use crate::util::{serde_mc_address, serde_public_key, serde_secret_key};
 
 /// Tool config
@@ -37,17 +37,31 @@ impl AppConfig {
     }
 
     pub fn currency(&self) -> &str {
-        if let Some(currency) = currency::from_env() {
+        if let Some(currency) = defaults::currency_from_env() {
             return currency;
         }
 
         if let Some(adnl) = &self.adnl {
-            if let Some(currency) = currency::detect_custom_currency(&adnl.zerostate_file_hash) {
-                return currency;
+            if let Some(defaults) = defaults::detect_custom_defaults(&adnl.zerostate_file_hash) {
+                return defaults.currency;
             }
         }
 
-        currency::DEFAULT
+        defaults::DEFAULT_CURRENCY
+    }
+
+    pub fn node_repo(&self) -> &str {
+        if let Some(node_repo) = defaults::node_repo_from_env() {
+            return node_repo;
+        }
+
+        if let Some(adnl) = &self.adnl {
+            if let Some(defaults) = defaults::detect_custom_defaults(&adnl.zerostate_file_hash) {
+                return defaults.node_repo;
+            }
+        }
+
+        defaults::DEFAULT_NODE_REPO
     }
 
     pub fn control(&self) -> Result<&AppConfigControl> {

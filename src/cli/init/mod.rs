@@ -6,9 +6,9 @@ use argh::FromArgs;
 use broxus_util::{const_bool, serde_optional_string, serde_string_or_number};
 use serde::{Deserialize, Serialize};
 
-use crate::config::{AppConfig, AppConfigDePoolDeploymentParams, DePoolType, NodeConfig};
-
 use super::{CliContext, ProjectDirs};
+use crate::config::{AppConfig, AppConfigDePoolDeploymentParams, DePoolType, NodeConfig};
+use crate::defaults;
 
 mod contracts;
 mod node;
@@ -270,7 +270,7 @@ struct TemplateNodeRepo {
 impl Default for TemplateNodeRepo {
     fn default() -> Self {
         Self {
-            url: node::DEFAULT_NODE_REPO.parse().unwrap(),
+            url: defaults::DEFAULT_NODE_REPO.parse().unwrap(),
             branch: None,
             features: Vec::new(),
         }

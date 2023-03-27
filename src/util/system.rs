@@ -1,7 +1,8 @@
-use std::ffi::{CStr, OsString};
+use std::ffi::{CStr, CString, OsString};
 use std::mem::MaybeUninit;
 use std::os::unix::ffi::OsStringExt;
-use std::path::PathBuf;
+use std::os::unix::prelude::OsStrExt;
+use std::path::{Path, PathBuf};
 use std::ptr;
 
 use anyhow::{Context, Result};
@@ -42,6 +43,31 @@ pub fn home_dir(uid: u32) -> Option<PathBuf> {
 
         Some(PathBuf::from(pw_dir))
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FsStats {
+    pub free_space: u64,
+    pub available_space: u64,
+    pub total_space: u64,
+    pub allocation_granularity: u64,
+}
+
+pub fn statvfs<P: AsRef<Path>>(path: P) -> Result<FsStats> {
+    let path =
+        CString::new(path.as_ref().as_os_str().as_bytes()).context("invalid path for statvfs")?;
+
+    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+
+    let res = unsafe { libc::statvfs(path.as_ptr() as *const _, &mut stat) };
+    anyhow::ensure!(res == 0, std::io::Error::last_os_error());
+
+    Ok(FsStats {
+        free_space: stat.f_frsize * stat.f_bfree,
+        available_space: stat.f_frsize * stat.f_bavail,
+        total_space: stat.f_frsize * stat.f_blocks,
+        allocation_granularity: stat.f_frsize,
+    })
 }
 
 unsafe fn get_passwd(uid: u32, buf: &mut Buffer) -> Option<libc::passwd> {

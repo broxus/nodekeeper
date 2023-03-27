@@ -1,3 +1,10 @@
+# 0.2.1 (2023-03-27)
+
+### Added
+
+- Show system info during `init`.
+- Detect default node repo and features based on global config.
+
 # 0.2.0 (2023-03-24)
 
 ### Added

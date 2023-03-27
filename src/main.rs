@@ -36,7 +36,7 @@ mod cli;
 mod config;
 mod contracts;
 mod crypto;
-mod currency;
+mod defaults;
 mod dirs;
 mod exporter;
 mod network;
