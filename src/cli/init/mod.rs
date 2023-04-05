@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::{CliContext, ProjectDirs};
 use crate::config::{AppConfig, AppConfigDePoolDeploymentParams, DePoolType, NodeConfig};
 use crate::defaults;
+use crate::util::{is_terminal, print_output};
 
 mod contracts;
 mod node;
@@ -53,21 +54,44 @@ impl Cmd {
             None => {
                 let template = load_template(self.template)?;
 
-                node::Cmd {
+                let node = node::Cmd {
                     rebuild: self.rebuild,
                 }
                 .run(theme, &ctx, &template)
                 .await?;
-                println!();
-                contracts::Cmd {}.run(theme, &ctx, &template).await
+
+                let contracts = contracts::Cmd {}.run(theme, &ctx, &template).await?;
+
+                if template.is_some() && !is_terminal() {
+                    print_output(serde_json::json!({
+                        "node": node,
+                        "contracts": contracts,
+                    }));
+                }
+
+                Ok(())
             }
             Some(SubCmd::Node(cmd)) => {
                 let template = load_template(self.template)?;
-                cmd.run(theme, &ctx, &template).await
+
+                let node = cmd.run(theme, &ctx, &template).await?;
+
+                if template.is_some() && !is_terminal() {
+                    print_output(serde_json::to_value(node).unwrap());
+                }
+
+                Ok(())
             }
             Some(SubCmd::Contracts(cmd)) => {
                 let template = load_template(self.template)?;
-                cmd.run(theme, &ctx, &template).await
+
+                let contracts = cmd.run(theme, &ctx, &template).await?;
+
+                if template.is_some() && !is_terminal() {
+                    print_output(serde_json::to_value(contracts).unwrap());
+                }
+
+                Ok(())
             }
             #[cfg(not(feature = "packaged"))]
             Some(SubCmd::Systemd(cmd)) => {

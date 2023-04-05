@@ -1,11 +1,14 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use argh::FromArgs;
+use broxus_util::serde_string;
 use console::style;
 use dialoguer::theme::Theme;
 use dialoguer::{Input, Select};
+use nekoton_utils::serde_address;
+use serde::Serialize;
 
 use super::{Template, TemplateValidator, TemplateValidatorDePool, TemplateValidatorSingle};
 use crate::cli::{CliContext, ProjectDirs};
@@ -31,13 +34,13 @@ impl Cmd {
         theme: &dyn Theme,
         ctx: &CliContext,
         template: &Option<Template>,
-    ) -> Result<()> {
+    ) -> Result<Option<Output>> {
         let template = match template {
             Some(template) => match &template.validator {
                 Some(validator) => Some(validator),
                 None => {
-                    println!("`validator` info is empty in the provided template");
-                    return Ok(());
+                    eprintln!("`validator` info is empty in the provided template");
+                    return Ok(None);
                 }
             },
             None => None,
@@ -52,7 +55,7 @@ impl Cmd {
         }
 
         // Check whether validation was already configured
-        if config.validator.is_some() {
+        if let Some(validator) = &config.validator {
             let overwrite = match template {
                 Some(TemplateValidator::Single(t)) => t.overwrite,
                 Some(TemplateValidator::DePool(t)) => t.overwrite,
@@ -63,36 +66,83 @@ impl Cmd {
                 )?,
             };
             if !overwrite {
-                return Ok(());
+                return Ok(Some(Output::from_existing(dirs, validator)));
             }
 
             if template.is_some() && overwrite {
-                println!("Overwriting validator config");
+                eprintln!("Overwriting validator config");
             }
         }
 
-        match template {
-            Some(TemplateValidator::Single(template)) => {
-                prepare_single_validator(theme, dirs, Some(template), &mut config)
-            }
-            Some(TemplateValidator::DePool(template)) => {
-                prepare_depool_validator(theme, dirs, Some(template), &mut config)
-            }
-            // Select validator type
-            None => match Select::with_theme(theme)
-                .with_prompt("Select validator type")
-                .item("Single")
-                .item("DePool")
-                .default(0)
-                .interact()?
-            {
-                // Prepare validator as a single node
-                0 => prepare_single_validator(theme, dirs, None, &mut config),
-                // Prepare validator as a depool
-                _ => prepare_depool_validator(theme, dirs, None, &mut config),
-            },
+        let output =
+            match template {
+                Some(TemplateValidator::Single(template)) => {
+                    prepare_single_validator(theme, dirs, Some(template), &mut config)
+                        .map(Output::Single)?
+                }
+                Some(TemplateValidator::DePool(template)) => {
+                    prepare_depool_validator(theme, dirs, Some(template), &mut config)
+                        .map(Output::DePool)?
+                }
+                // Select validator type
+                None => match Select::with_theme(theme)
+                    .with_prompt("Select validator type")
+                    .item("Single")
+                    .item("DePool")
+                    .default(0)
+                    .interact()?
+                {
+                    // Prepare validator as a single node
+                    0 => prepare_single_validator(theme, dirs, None, &mut config)
+                        .map(Output::Single)?,
+                    // Prepare validator as a depool
+                    _ => prepare_depool_validator(theme, dirs, None, &mut config)
+                        .map(Output::DePool)?,
+                },
+            };
+
+        Ok(Some(output))
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "lowercase", tag = "type")]
+pub enum Output {
+    Single(OutputSingle),
+    DePool(OutputDePool),
+}
+
+impl Output {
+    fn from_existing(dirs: &ProjectDirs, validator: &AppConfigValidator) -> Self {
+        match validator {
+            AppConfigValidator::Single(single) => Self::Single(OutputSingle {
+                validator_wallet: single.address.clone(),
+                target_balance: compute_target_balance_for_single(single.stake_per_round),
+                validator_wallet_keys_path: dirs.validator_keys.clone(),
+            }),
+            AppConfigValidator::DePool(depool) => Self::DePool(OutputDePool {
+                validator_wallet: depool.owner.clone(),
+                depool: depool.depool.clone(),
+                target_balance: compute_target_balance_for_depool(
+                    depool
+                        .deploy
+                        .as_ref()
+                        .map(|deploy| deploy.validator_assurance),
+                ),
+                validator_wallet_keys_path: dirs.validator_keys.clone(),
+                depool_keys_path: dirs.depool_keys.clone(),
+            }),
         }
     }
+}
+
+#[derive(Debug, Serialize)]
+pub struct OutputSingle {
+    #[serde(with = "serde_address")]
+    pub validator_wallet: ton_block::MsgAddressInt,
+    #[serde(with = "serde_string")]
+    pub target_balance: u128,
+    pub validator_wallet_keys_path: PathBuf,
 }
 
 fn prepare_single_validator(
@@ -100,7 +150,7 @@ fn prepare_single_validator(
     dirs: &ProjectDirs,
     template: Option<&TemplateValidatorSingle>,
     app_config: &mut AppConfig,
-) -> Result<()> {
+) -> Result<OutputSingle> {
     use crate::contracts::*;
 
     const MIN_STAKE: u64 = 10_000 * ONE_EVER as u64;
@@ -173,12 +223,12 @@ fn prepare_single_validator(
     // Done
     steps.next("Validator configured successfully. Great!");
 
-    let target_balance = stake_per_round as u128 * 2 + Wallet::INITIAL_BALANCE;
+    let target_balance = compute_target_balance_for_single(stake_per_round);
 
-    println!(
+    eprintln!(
         "\n{}\n{}\n\n{} {}{}\n\n{}\n{}",
         style("Validator wallet address:").green().bold(),
-        style(wallet_address).bold(),
+        style(&wallet_address).bold(),
         style("Required validator wallet balance:").green().bold(),
         style(format!("{} {currency}", Tokens(target_balance))).bold(),
         style(format!(
@@ -192,7 +242,27 @@ fn prepare_single_validator(
         style(dirs.validator_keys.display()).bold()
     );
 
-    Ok(())
+    Ok(OutputSingle {
+        validator_wallet: wallet_address,
+        target_balance,
+        validator_wallet_keys_path: dirs.validator_keys.clone(),
+    })
+}
+
+fn compute_target_balance_for_single(stake_per_round: u64) -> u128 {
+    Wallet::INITIAL_BALANCE + stake_per_round as u128 * 2
+}
+
+#[derive(Debug, Serialize)]
+pub struct OutputDePool {
+    #[serde(with = "serde_address")]
+    pub validator_wallet: ton_block::MsgAddressInt,
+    #[serde(with = "serde_address")]
+    pub depool: ton_block::MsgAddressInt,
+    #[serde(with = "serde_string")]
+    pub target_balance: u128,
+    pub validator_wallet_keys_path: PathBuf,
+    pub depool_keys_path: PathBuf,
 }
 
 fn prepare_depool_validator(
@@ -200,7 +270,7 @@ fn prepare_depool_validator(
     dirs: &ProjectDirs,
     template: Option<&TemplateValidatorDePool>,
     app_config: &mut AppConfig,
-) -> Result<()> {
+) -> Result<OutputDePool> {
     use crate::contracts::*;
 
     let currency = &app_config.currency().to_owned();
@@ -225,20 +295,23 @@ fn prepare_depool_validator(
     // Done
     steps.next("Everything is ready for the validation!");
 
-    println!(
+    let target_balance = compute_target_balance_for_depool(
+        params
+            .deploy
+            .as_ref()
+            .map(|deploy| deploy.validator_assurance),
+    );
+
+    eprintln!(
         "\n{}\n{}\n\n{}\n{}",
         style("Validator wallet address:").green().bold(),
-        style(params.owner).bold(),
+        style(&params.owner).bold(),
         style("DePool address:").green().bold(),
-        style(params.depool).bold(),
+        style(&params.depool).bold(),
     );
 
     if let Some(deployment) = params.deploy {
-        let target_balance = deployment.validator_assurance as u128 * 2
-            + Wallet::INITIAL_BALANCE
-            + DePool::INITIAL_BALANCE;
-
-        println!(
+        eprintln!(
             "\n{} {}{}",
             style("Required validator wallet balance:").green().bold(),
             style(format!("{} {currency}", Tokens(target_balance))).bold(),
@@ -254,14 +327,29 @@ fn prepare_depool_validator(
         );
     }
 
-    println!(
+    eprintln!(
         "\n{}\n{}\n{}",
         style("Make sure you back up your keys:").yellow().bold(),
         style(dirs.validator_keys.display()).bold(),
         style(dirs.depool_keys.display()).bold(),
     );
 
-    Ok(())
+    Ok(OutputDePool {
+        validator_wallet: params.owner,
+        depool: params.depool,
+        target_balance,
+        validator_wallet_keys_path: dirs.validator_keys.clone(),
+        depool_keys_path: dirs.depool_keys.clone(),
+    })
+}
+
+fn compute_target_balance_for_depool(validator_assurance: Option<u64>) -> u128 {
+    match validator_assurance {
+        Some(assurance) => {
+            Wallet::INITIAL_BALANCE + DePool::INITIAL_BALANCE + assurance as u128 * 2
+        }
+        None => Wallet::INITIAL_BALANCE,
+    }
 }
 
 fn prepare_new_depool(

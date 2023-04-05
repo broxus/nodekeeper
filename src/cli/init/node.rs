@@ -9,6 +9,7 @@ use argh::FromArgs;
 use dialoguer::theme::Theme;
 use dialoguer::{Completion, Input, Select};
 use reqwest::Url;
+use serde::Serialize;
 use tokio::process::Command;
 
 use super::Template;
@@ -32,7 +33,7 @@ impl Cmd {
         theme: &dyn Theme,
         ctx: &CliContext,
         template: &Option<Template>,
-    ) -> Result<()> {
+    ) -> Result<Output> {
         let dirs = ctx.dirs();
 
         // Compute steps len
@@ -40,21 +41,30 @@ impl Cmd {
 
         steps.next("Preparing configs");
 
+        let mut output = Output::default();
+
         // Ensure root dir exists
         if !prepare_root_dir(theme, dirs, template)? {
-            return Ok(());
+            return Ok(output);
         }
 
         // Ensure that global config exists
-        let global_config = load_global_config(theme, dirs, template).await?;
+        let global_config = load_global_config(theme, dirs, template, &mut output).await?;
         // Ensure that node config exists
-        let mut node_config = load_node_config(dirs, template)?;
+        let mut node_config = load_node_config(dirs, template, &mut output)?;
         // Ensure that app config exists
-        let mut app_config = load_app_config(dirs, template)?;
+        let mut app_config = load_app_config(dirs, template, &mut output)?;
 
         // Configure control server
-        if !setup_control_server(theme, dirs, template, &mut app_config, &mut node_config)? {
-            return Ok(());
+        if !setup_control_server(
+            theme,
+            dirs,
+            template,
+            &mut app_config,
+            &mut node_config,
+            &mut output,
+        )? {
+            return Ok(output);
         }
 
         // Configure udp rpc
@@ -65,19 +75,29 @@ impl Cmd {
             &mut app_config,
             &mut node_config,
             &global_config,
+            &mut output,
         )
         .await?
         {
-            return Ok(());
+            return Ok(output);
         }
 
         // Configure node config
-        setup_node_config_paths(theme, dirs, template, &mut node_config)?;
+        setup_node_config_paths(theme, dirs, template, &mut node_config, &mut output)?;
 
         // Clone and build the node
         steps.next("Preparing binary");
-        if !setup_binary(theme, dirs, &app_config, template, self.rebuild).await? {
-            return Ok(());
+        if !setup_binary(
+            theme,
+            dirs,
+            &app_config,
+            template,
+            self.rebuild,
+            &mut output,
+        )
+        .await?
+        {
+            return Ok(output);
         }
 
         // Notify user about creating systemd services
@@ -87,10 +107,52 @@ impl Cmd {
         check_systemd_service(dirs)?;
 
         // Check cpu/memory/disk
-        check_resources(&node_config)?;
+        check_resources(&node_config, &mut output)?;
 
-        Ok(())
+        Ok(output)
     }
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct Output {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub global_config_updated: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logger_config_reset: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_config_reset: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_config_reset: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_config_updated: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_config_updated: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_control_addr: Option<SocketAddrV4>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_public_addr: Option<SocketAddrV4>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zerostate_file_hash: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_db_path: Option<PathBuf>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_binary_updated: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_version: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_is_suitable: Option<bool>,
 }
 
 fn prepare_root_dir(
@@ -126,6 +188,7 @@ async fn load_global_config(
     theme: &dyn Theme,
     dirs: &ProjectDirs,
     template: &Option<Template>,
+    output: &mut Output,
 ) -> Result<GlobalConfig> {
     #[derive(Clone)]
     enum PathOrUrl {
@@ -221,7 +284,7 @@ async fn load_global_config(
                         match download_config(url).await {
                             Ok(config) => break Cow::Owned(config),
                             Err(e) => {
-                                print_error(format!("Invalid config: {e}"));
+                                print_error(format!("invalid config: {e}"));
                                 continue;
                             }
                         }
@@ -233,18 +296,24 @@ async fn load_global_config(
         std::fs::create_dir_all(&dirs.node_configs_dir)
             .context("failed to create node configs dir")?;
         dirs.store_global_config(data)?;
+        output.global_config_updated = Some(true);
     }
 
     GlobalConfig::load(global_config)
 }
 
-fn load_node_config(dirs: &ProjectDirs, template: &Option<Template>) -> Result<NodeConfig> {
+fn load_node_config(
+    dirs: &ProjectDirs,
+    template: &Option<Template>,
+    output: &mut Output,
+) -> Result<NodeConfig> {
     // Generate default log config if it doesn't exist
     let node_log_config = &dirs.node_log_config;
     if !node_log_config.exists() || matches!(template, Some(t) if t.general.reset_logger_config) {
         dirs.store_node_log_config(&NodeLogConfig::generate())?;
+        output.logger_config_reset = Some(true);
         if template.is_some() {
-            println!("Logger config overwritten");
+            eprintln!("Logger config overwritten");
         }
     }
 
@@ -253,8 +322,9 @@ fn load_node_config(dirs: &ProjectDirs, template: &Option<Template>) -> Result<N
         // Generate and save default node config
         let node_config = NodeConfig::generate()?;
         dirs.store_node_config(&node_config)?;
+        output.node_config_reset = Some(true);
         if template.is_some() {
-            println!("Node config overwritten");
+            eprintln!("Node config overwritten");
         }
         return Ok(node_config);
     }
@@ -263,14 +333,19 @@ fn load_node_config(dirs: &ProjectDirs, template: &Option<Template>) -> Result<N
     NodeConfig::load(node_config)
 }
 
-fn load_app_config(dirs: &ProjectDirs, template: &Option<Template>) -> Result<AppConfig> {
+fn load_app_config(
+    dirs: &ProjectDirs,
+    template: &Option<Template>,
+    output: &mut Output,
+) -> Result<AppConfig> {
     let app_config = &dirs.app_config;
     if !app_config.exists() || matches!(template, Some(t) if t.general.reset_app_config) {
         // Generate and save default app config
         let app_config = AppConfig::default();
         dirs.store_app_config(&app_config)?;
+        output.app_config_reset = Some(true);
         if template.is_some() {
-            println!("App config overwritten");
+            eprintln!("App config overwritten");
         }
         return Ok(app_config);
     }
@@ -285,6 +360,7 @@ fn setup_control_server(
     template: &Option<Template>,
     app_config: &mut AppConfig,
     node_config: &mut NodeConfig,
+    output: &mut Output,
 ) -> Result<bool> {
     use everscale_crypto::ed25519;
 
@@ -307,7 +383,7 @@ fn setup_control_server(
             let client_port = existing_client.server_address.port();
             if existing_client.server_address.port() != existing_server.address.port() {
                 let port = if template.is_some() {
-                    println!("Using server control port: {server_port}");
+                    eprintln!("Using server control port: {server_port}");
                     server_port
                 } else {
                     match Select::with_theme(theme)
@@ -350,7 +426,7 @@ fn setup_control_server(
                 }
 
                 if template.is_some() {
-                    println!("Control server pubkey updated");
+                    eprintln!("Control server pubkey updated");
                 }
 
                 // Update public key
@@ -377,7 +453,7 @@ fn setup_control_server(
                     };
 
                     if template.is_some() && !append {
-                        println!("Control client keys replaced");
+                        eprintln!("Control client keys replaced");
                     }
 
                     if !append {
@@ -393,10 +469,12 @@ fn setup_control_server(
             // Save changed configs
             if client_changed {
                 dirs.store_app_config(app_config)?;
+                output.app_config_updated = Some(true);
             }
             if server_changed {
                 node_config.set_control_server(&existing_server)?;
                 dirs.store_node_config(node_config)?;
+                output.node_config_updated = Some(true);
             }
         }
         // Only node config entry exists
@@ -419,7 +497,7 @@ fn setup_control_server(
                 // Explicitly ask about allowing any client to connect
                 None if template.is_some() || !confirm(theme, false, "Allow any clients?")? => {
                     existing_server.clients = Some(vec![ed25519::PublicKey::from(&client_key)]);
-                    println!("Generated new client keys");
+                    eprintln!("Generated new client keys");
                     true
                 }
                 None => false,
@@ -439,7 +517,7 @@ fn setup_control_server(
                     };
 
                     if template.is_some() && !append {
-                        println!("Control client keys replaced");
+                        eprintln!("Control client keys replaced");
                     }
 
                     // Add or replace clients config
@@ -461,14 +539,16 @@ fn setup_control_server(
                 client_key,
             ));
             dirs.store_app_config(app_config)?;
+            output.app_config_updated = Some(true);
 
             if template.is_some() {
-                println!("Control server entry created");
+                eprintln!("Control server entry created");
             }
 
             if node_config_changed {
                 node_config.set_control_server(&existing_server)?;
                 dirs.store_node_config(node_config)?;
+                output.node_config_updated = Some(true);
             }
         }
         // Server config entry doesn't exist
@@ -541,10 +621,17 @@ fn setup_control_server(
             dirs.store_app_config(app_config)?;
             dirs.store_node_config(node_config)?;
 
+            output.app_config_updated = Some(true);
+            output.node_config_updated = Some(true);
+
             if template.is_some() {
-                println!("Control server entry overwritten");
+                eprintln!("Control server entry overwritten");
             }
         }
+    }
+
+    if let Some(control) = &app_config.control {
+        output.server_control_addr = Some(control.server_address);
     }
 
     Ok(true)
@@ -557,6 +644,7 @@ async fn setup_adnl(
     app_config: &mut AppConfig,
     node_config: &mut NodeConfig,
     global_config: &GlobalConfig,
+    output: &mut Output,
 ) -> Result<bool> {
     // Compute default adnl port
     let adnl_port = node_config
@@ -592,14 +680,15 @@ async fn setup_adnl(
                     adnl_node.ip_address.set_ip(public_ip);
                     node_config.set_adnl_node(&adnl_node)?;
                     dirs.store_node_config(node_config)?;
+                    output.node_config_updated = Some(true);
 
                     if template.is_some() {
-                        println!("Updated public IP");
+                        eprintln!("Updated public IP");
                     }
                 }
             }
 
-            // Update client config if it differes from the node config
+            // Update client config if it differs from the node config
             let server_pubkey = adnl_node.overlay_pubkey()?;
             if adnl_client.server_address != adnl_node.ip_address
                 || adnl_client.server_pubkey != server_pubkey
@@ -616,9 +705,10 @@ async fn setup_adnl(
                 adnl_client.zerostate_file_hash = zerostate_file_hash;
 
                 dirs.store_app_config(app_config)?;
+                output.app_config_updated = Some(true);
 
                 if template.is_some() {
-                    println!("ADNL config overwritten");
+                    eprintln!("ADNL config overwritten");
                 }
             }
         }
@@ -632,7 +722,8 @@ async fn setup_adnl(
                 zerostate_file_hash,
             });
 
-            app_config.store(&dirs.app_config)?;
+            dirs.store_app_config(app_config)?;
+            output.app_config_updated = Some(true);
         }
         // Node config entry doesn't exist
         (_, None) => {
@@ -677,7 +768,15 @@ async fn setup_adnl(
 
             dirs.store_app_config(app_config)?;
             dirs.store_node_config(node_config)?;
+            output.app_config_updated = Some(true);
+            output.node_config_updated = Some(true);
         }
+    }
+
+    output.zerostate_file_hash = Some(base64::encode(zerostate_file_hash));
+
+    if let Some(adnl) = &app_config.adnl {
+        output.node_public_addr = Some(adnl.server_address);
     }
 
     Ok(true)
@@ -688,6 +787,7 @@ fn setup_node_config_paths(
     dirs: &ProjectDirs,
     template: &Option<Template>,
     node_config: &mut NodeConfig,
+    output: &mut Output,
 ) -> Result<()> {
     const DB_PATH_FALLBACK: &str = "node_db";
 
@@ -698,7 +798,8 @@ fn setup_node_config_paths(
     let old_path = if let Some(db_path) = node_config.get_internal_db_path()? {
         if template.is_none() && db_path != PathBuf::from(DB_PATH_FALLBACK) {
             dirs.store_node_config(node_config)?;
-            std::fs::create_dir_all(db_path)?;
+            std::fs::create_dir_all(db_path.clone())?;
+            output.node_db_path = Some(db_path);
             return Ok(());
         }
         db_path
@@ -736,8 +837,12 @@ fn setup_node_config_paths(
     dirs.store_node_config(node_config)?;
 
     if template.is_some() && path != old_path {
-        println!("Node DB path updated");
+        eprintln!("Node DB path updated");
     }
+
+    output.node_config_updated = Some(true);
+    output.node_db_path = Some(path);
+
     Ok(())
 }
 
@@ -747,10 +852,38 @@ async fn setup_binary(
     app_config: &AppConfig,
     template: &Option<Template>,
     force: bool,
+    output: &mut Output,
 ) -> Result<bool> {
+    async fn get_node_version<P: AsRef<Path>>(node: P) -> Result<String> {
+        use std::io::Write;
+
+        let child = Command::new(node.as_ref())
+            .arg("--version")
+            .output()
+            .await
+            .context("failed to run node binary")?;
+
+        if !child.status.success() {
+            std::io::stderr().write_all(&child.stdout)?;
+            anyhow::bail!("node finished with exit code {}", child.status);
+        }
+
+        parse_node_version(&child.stdout)
+            .map(String::from)
+            .context("invalid node output during version check")
+    }
+
+    fn parse_node_version(output: &[u8]) -> Option<&str> {
+        output
+            .strip_prefix(b"TON Node, version ")
+            .and_then(|output| output.split(|&ch| ch == b'\n').next())
+            .and_then(|output| std::str::from_utf8(output).ok())
+    }
+
     if !force && dirs.node_binary.exists() {
-        // Do nothing if binary exists
-        // TODO: print version and ask for update?
+        // Only check version if binary exists
+        let node_version = get_node_version(&dirs.node_binary).await?;
+        output.node_version = Some(node_version);
         return Ok(true);
     }
 
@@ -810,6 +943,11 @@ async fn setup_binary(
 
     dirs.install_node_from_repo(&repo, &branch, &features)
         .await?;
+
+    let node_version = get_node_version(&dirs.node_binary).await?;
+    output.node_binary_updated = Some(true);
+    output.node_version = Some(node_version);
+
     Ok(true)
 }
 
@@ -822,12 +960,12 @@ async fn clone_repo<P: AsRef<Path>>(url: &Url, branch: &Option<String>, target: 
 
     let mut command = Command::new("git");
     command
-        .stdout(Stdio::piped())
+        .stdout(Stdio::null())
         .arg("clone")
         .arg("--recursive");
 
     if let Some(branch) = branch {
-        println!("Using branch: {branch}");
+        eprintln!("Using branch: {branch}");
         command.arg("--branch").arg(branch);
     }
 
@@ -840,7 +978,7 @@ async fn clone_repo<P: AsRef<Path>>(url: &Url, branch: &Option<String>, target: 
 async fn build_node<P: AsRef<Path>>(target: P, features: &[String]) -> Result<PathBuf> {
     let target = target.as_ref();
 
-    if let Err(e) = exec(Command::new("cargo").arg("-V")).await {
+    if let Err(e) = exec(Command::new("cargo").stdout(Stdio::null()).arg("-V")).await {
         print_error(
             "Failed to check `cargo` version. Rust is not installed properly.\n  \
                Please use the following command to install:\n  \
@@ -852,12 +990,12 @@ async fn build_node<P: AsRef<Path>>(target: P, features: &[String]) -> Result<Pa
     let mut command = Command::new("cargo");
     command
         .current_dir(target)
-        .stdout(Stdio::piped())
+        .stdout(Stdio::null())
         .arg("build")
         .arg("--release");
 
     if !features.is_empty() {
-        println!("Using features: {features:?}");
+        eprintln!("Using features: {features:?}");
         command.arg("--features").arg(features.join(" "));
     }
 
@@ -878,14 +1016,14 @@ fn check_systemd_service(dirs: &ProjectDirs) -> Result<()> {
     // Get current exe path
     let current_exe = std::env::current_exe()?;
 
-    println!(
+    eprintln!(
         "\nTo configure systemd services, run:\n  sudo {} init systemd",
         current_exe.display()
     );
     Ok(())
 }
 
-fn check_resources(node_config: &NodeConfig) -> Result<()> {
+fn check_resources(node_config: &NodeConfig, output: &mut Output) -> Result<()> {
     use console::style;
     use sysinfo::{System, SystemExt};
 
@@ -943,14 +1081,14 @@ fn check_resources(node_config: &NodeConfig) -> Result<()> {
     }
 
     let mut without_warnings = true;
-    println!("\nSystem info:");
+    eprintln!("\nSystem info:");
     for (is_ok, item) in entries {
         without_warnings &= is_ok;
-        println!("  • {item}");
+        eprintln!("  • {item}");
     }
 
     if !without_warnings {
-        println!(
+        eprintln!(
             "{}",
             style(
                 "\nThe system configuration does not meet the recommended host requirements.\
@@ -960,6 +1098,7 @@ fn check_resources(node_config: &NodeConfig) -> Result<()> {
         );
     }
 
+    output.system_is_suitable = Some(without_warnings);
     Ok(())
 }
 

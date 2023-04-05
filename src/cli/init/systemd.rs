@@ -103,7 +103,7 @@ pub fn prepare_services(
     };
 
     let print_service = |path: &Path| {
-        println!(
+        eprintln!(
             "{}",
             style(format!("Created validator service at {}", path.display())).dim()
         );

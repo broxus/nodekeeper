@@ -1,3 +1,13 @@
+# 0.2.3 (2023-04-05)
+
+### Added
+
+- JSON output for template initialization from non-tty environment.
+
+### Changed
+
+- Intermediate messages are now printed to the `stderr`.
+
 # 0.2.2 (2023-03-27)
 
 ### Fixed

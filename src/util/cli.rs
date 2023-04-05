@@ -163,7 +163,7 @@ where
 }
 
 pub fn print_output<T: std::fmt::Display>(arg: T) {
-    if console::user_attended() {
+    if is_terminal() {
         writeln!(std::io::stdout(), "{arg:#}")
     } else {
         write!(std::io::stdout(), "{arg}")
@@ -172,7 +172,11 @@ pub fn print_output<T: std::fmt::Display>(arg: T) {
 }
 
 pub fn print_error(text: impl std::fmt::Display) {
-    println!("{}", console::style(format!("✘ {text}")).red().bold());
+    if is_terminal() {
+        eprintln!("{}", console::style(format!("✘ {text}")).red().bold());
+    } else {
+        eprintln!("Error: {text}");
+    }
 }
 
 pub fn note(text: impl std::fmt::Display) -> impl std::fmt::Display {
@@ -190,12 +194,23 @@ impl Steps {
     }
 
     pub fn next(&mut self, text: impl std::fmt::Display) {
-        println!(
-            "{} {text}",
-            console::style(format!("[{}/{}]", self.current, self.total))
-                .bold()
-                .dim()
-        );
+        if is_terminal() {
+            eprintln!(
+                "{} {text}",
+                console::style(format!("[{}/{}]", self.current, self.total))
+                    .bold()
+                    .dim()
+            );
+        } else {
+            eprintln!("[{}/{}] {text}", self.current, self.total);
+        }
         self.current += 1;
     }
+}
+
+pub fn is_terminal() -> bool {
+    use once_cell::race::OnceBox;
+
+    static IS_TERMINAL: OnceBox<bool> = OnceBox::new();
+    *IS_TERMINAL.get_or_init(|| Box::new(console::user_attended()))
 }
