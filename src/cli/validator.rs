@@ -46,6 +46,10 @@ pub struct Cmd {
     /// ignore contracts deployment
     #[argh(switch)]
     ignore_deploy: bool,
+
+    /// force elect
+    #[argh(switch)]
+    force: bool,
 }
 
 impl Cmd {
@@ -65,6 +69,10 @@ impl Cmd {
                 ignore_deploy: self.ignore_deploy,
             },
         );
+
+        if self.force {
+            return manager.force_elect().await;
+        }
 
         // Spawn cancellation future
         let cancellation_token = CancellationToken::new();

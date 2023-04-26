@@ -1249,7 +1249,7 @@ dependencies = [
 
 [[package]]
 name = "nodekeeper"
-version = "0.2.3"
+version = "0.2.4-rc.0"
 dependencies = [
  "aes",
  "anyhow",

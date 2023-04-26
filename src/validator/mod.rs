@@ -226,6 +226,73 @@ impl ValidationManager {
         }
     }
 
+    pub async fn force_elect(&self) -> Result<()> {
+        // Read config
+        let mut config = AppConfig::load(&self.dirs.app_config)?;
+        let validator = config
+            .validator
+            .take()
+            .context("validator entry not found in the app config")?;
+
+        // Create tcp rpc and wait until node is synced
+        let node_tcp_rpc = NodeTcpRpc::new(config.control()?).await?;
+        if !self.is_synced(&node_tcp_rpc, validator.is_single()).await? {
+            anyhow::bail!("node not syned");
+        }
+        let node_udp_rpc = NodeUdpRpc::new(config.adnl()?).await?;
+
+        // Create subscription
+        let subscription = Subscription::new(node_tcp_rpc, node_udp_rpc);
+        subscription.ensure_ready().await?;
+
+        // Get current network config params
+        let ConfigWithId {
+            config: blockchain_config,
+            ..
+        } = subscription.tcp_rpc().get_config_all().await?;
+
+        if !self.params.ignore_deploy {
+            self.ensure_deployed(&validator, &subscription).await?;
+        }
+
+        // Get addresses
+        let elector_address = blockchain_config
+            .elector_address()
+            .context("invalid elector address")?;
+        let timings = blockchain_config
+            .elector_params()
+            .context("invalid elector params")?;
+
+        // Participate in elections
+        let elector = Elector::new(elector_address, subscription.clone());
+        let elector_data = elector
+            .get_data()
+            .await
+            .context("failed to get elector data")?;
+
+        // Get current election id
+        let Some(election_id) = elector_data.election_id() else {
+            anyhow::bail!("no current elections in the elector state");
+        };
+
+        // Prepare context
+        let keypair = self.dirs.load_validator_keys()?;
+        let ctx = ElectionsContext {
+            subscription,
+            elector,
+            elector_data,
+            election_id,
+            timings,
+            guard: &self.guard,
+        };
+
+        // Prepare election future
+        match validator {
+            AppConfigValidator::Single(validation) => validation.elect(keypair, ctx).await,
+            AppConfigValidator::DePool(validation) => validation.elect(keypair, ctx).await,
+        }
+    }
+
     async fn ensure_deployed(
         &self,
         validator: &AppConfigValidator,
