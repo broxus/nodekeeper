@@ -369,13 +369,28 @@ struct ElectionsContext<'a> {
     guard: &'a Mutex<()>,
 }
 
+impl ElectionsContext<'_> {
+    async fn check_can_be_elected(&mut self, address: &ton_block::MsgAddressInt) -> Result<bool> {
+        self.elector_data = self.elector.get_data().await?;
+        let Some(current_election_id) = self.elector_data.election_id() else {
+            return Ok(false)
+        };
+
+        Ok(current_election_id == self.election_id && !self.elector_data.elected(address))
+    }
+}
+
 impl AppConfigValidatorSingle {
     async fn deploy(&self, _: DeploymentContext<'_>) -> Result<()> {
         // TODO: deploy validator wallet if it differs from ever wallet
         Ok(())
     }
 
-    async fn elect(self, keypair: ed25519_dalek::Keypair, ctx: ElectionsContext<'_>) -> Result<()> {
+    async fn elect(
+        self,
+        keypair: ed25519_dalek::Keypair,
+        mut ctx: ElectionsContext<'_>,
+    ) -> Result<()> {
         tracing::info!(
             election_id = ctx.election_id,
             address = %self.address,
@@ -404,8 +419,8 @@ impl AppConfigValidatorSingle {
                 .context("failed to recover stake")?;
         }
 
-        if ctx.elector_data.elected(wallet.address()) {
-            // Do nothing if elected
+        // Check whether validator was already elected before waiting for balance
+        if !ctx.check_can_be_elected(wallet.address()).await? {
             tracing::info!("validator already elected");
             return Ok(());
         }
@@ -413,6 +428,12 @@ impl AppConfigValidatorSingle {
         // Wait until validator wallet balance is enough
         let target_balance = self.stake_per_round as u128 + 2 * ONE_EVER;
         wallet.wait_for_balance(target_balance).await?;
+
+        // Check whether validator was already elected after waiting for balance
+        if !ctx.check_can_be_elected(wallet.address()).await? {
+            tracing::info!("validator already elected");
+            return Ok(());
+        }
 
         let signature_id = ctx.subscription.get_signature_id().await?;
 
@@ -592,7 +613,11 @@ impl AppConfigValidatorDePool {
         Ok(())
     }
 
-    async fn elect(self, keypair: ed25519_dalek::Keypair, ctx: ElectionsContext<'_>) -> Result<()> {
+    async fn elect(
+        self,
+        keypair: ed25519_dalek::Keypair,
+        mut ctx: ElectionsContext<'_>,
+    ) -> Result<()> {
         tracing::info!(
             election_id = ctx.election_id,
             depool = %self.depool,
@@ -651,7 +676,9 @@ impl AppConfigValidatorDePool {
         }
 
         let proxy = &depool_info.proxies[round_id as usize % 2];
-        if ctx.elector_data.elected(proxy) {
+
+        // Check whether proxy was already elected after waiting for balance
+        if !ctx.check_can_be_elected(proxy).await? {
             tracing::info!(%proxy, "proxy already elected");
             return Ok(());
         }
