@@ -1,3 +1,14 @@
+# 0.2.4 (2023-04-05)
+
+### Added
+
+- Added support for a new Venom update.
+- Added a `force` flag to the `validator` command. Used to force elect without checking the network config.
+
+### Fixed
+
+- Double check election id before adding validator keys.
+
 # 0.2.3 (2023-04-05)
 
 ### Added

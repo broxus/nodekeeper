@@ -82,7 +82,7 @@ impl DePool {
 
     pub async fn get_balance(&self) -> Result<Option<u128>> {
         let account = self.subscription.get_account_state(&self.address).await?;
-        Ok(account.map(|state| state.storage.balance.grams.0))
+        Ok(account.map(|state| state.storage.balance.grams.as_u128()))
     }
 
     pub async fn deploy(&self, params: DePoolInitParams) -> Result<()> {
@@ -111,7 +111,7 @@ impl DePool {
                             Some(self.address.clone()),
                         )
                         .context("failed to encode constructor")?,
-                );
+                )?;
 
                 message.set_state_init(self.ty.compute_depool_state_init(&keypair.public)?);
 
@@ -124,7 +124,7 @@ impl DePool {
     }
 
     pub fn ticktock(&self) -> Result<InternalMessage> {
-        Ok(self.internal_message_to_self(ONE_EVER, common::ticktock().encode_internal_input(&[])?))
+        self.internal_message_to_self(ONE_EVER, common::ticktock().encode_internal_input(&[])?)
     }
 
     pub async fn maintain_balances(&self) -> Result<Vec<InternalMessage>> {
@@ -156,8 +156,8 @@ impl DePool {
             if let Some(remaining) = remaining.to_u128() {
                 messages.push(self.internal_message_to_self(
                     remaining,
-                    &common::receive_funds().encode_internal_input(&[])?,
-                ));
+                    common::receive_funds().encode_internal_input(&[])?,
+                )?);
             }
         }
 
@@ -171,7 +171,9 @@ impl DePool {
                 .context("proxy not deployed")?;
 
             let proxy_balance = match account.storage.state {
-                ton_block::AccountState::AccountActive { .. } => account.storage.balance.grams.0,
+                ton_block::AccountState::AccountActive { .. } => {
+                    account.storage.balance.grams.as_u128()
+                }
                 ton_block::AccountState::AccountFrozen { .. } => {
                     anyhow::bail!("proxy {proxy} frozen");
                 }
@@ -193,11 +195,11 @@ impl DePool {
     }
 
     pub fn add_ordinary_stake(&self, amount: u64) -> Result<InternalMessage> {
-        Ok(self.internal_message_to_self(
+        self.internal_message_to_self(
             (amount as u128) + ONE_EVER / 2,
-            &common::add_ordinary_stake()
+            common::add_ordinary_stake()
                 .encode_internal_input(&[amount.token_value().named("stake")])?,
-        ))
+        )
     }
 
     pub fn set_allowed_participant(
@@ -205,11 +207,11 @@ impl DePool {
         address: &ton_block::MsgAddressInt,
     ) -> Result<InternalMessage> {
         self.ensure_stever()?;
-        Ok(self.internal_message_to_self(
+        self.internal_message_to_self(
             ONE_EVER,
             stever::set_allowed_participant()
                 .encode_internal_input(&[address.clone().token_value().named("addr")])?,
-        ))
+        )
     }
 
     pub fn get_participant_info(
@@ -285,28 +287,26 @@ impl DePool {
         Ok(())
     }
 
-    fn external_message_to_self<T>(&self, body: T) -> ton_block::Message
-    where
-        T: Into<ton_types::SliceData>,
-    {
+    fn external_message_to_self(&self, body: ton_types::BuilderData) -> Result<ton_block::Message> {
         let mut message =
             ton_block::Message::with_ext_in_header(ton_block::ExternalInboundMessageHeader {
                 dst: self.address.clone(),
                 ..Default::default()
             });
-        message.set_body(body.into());
-        message
+        message.set_body(ton_types::SliceData::load_builder(body)?);
+        Ok(message)
     }
 
-    fn internal_message_to_self<T>(&self, amount: u128, payload: T) -> InternalMessage
-    where
-        T: Into<ton_types::Cell>,
-    {
-        InternalMessage {
+    fn internal_message_to_self(
+        &self,
+        amount: u128,
+        payload: ton_types::BuilderData,
+    ) -> Result<InternalMessage> {
+        Ok(InternalMessage {
             amount,
             dst: self.address.clone(),
-            payload: payload.into(),
-        }
+            payload: payload.into_cell()?,
+        })
     }
 }
 
@@ -330,7 +330,8 @@ impl DePoolType {
     ) -> Result<ton_block::StateInit> {
         let mut state_init = self.depool_tvc().clone();
         if let Some(data) = state_init.data.take() {
-            let data = ton_abi::Contract::insert_pubkey(data.into(), pubkey.as_bytes())
+            let data = ton_types::SliceData::load_cell(data)?;
+            let data = ton_abi::Contract::insert_pubkey(data, pubkey.as_bytes())
                 .context("failed to insert pubkey")?;
             state_init.data = Some(data.into_cell());
         }

@@ -134,7 +134,7 @@ impl Elector {
         let data = state_init.data.context("elector data is empty")?;
         let inner: data::PartialElectorData = ton_abi::TokenValue::decode_params(
             data::layout(),
-            data.into(),
+            ton_types::SliceData::load_cell(data)?,
             &ton_abi::contract::ABI_VERSION_2_1,
             true,
         )

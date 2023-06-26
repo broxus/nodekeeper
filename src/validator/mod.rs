@@ -412,7 +412,7 @@ impl AppConfigValidatorSingle {
             let _guard = ctx.guard.lock().await;
 
             // Send recover stake message
-            tracing::info!(stake = %Tokens(stake.0), "recovering stake");
+            tracing::info!(stake = %Tokens(stake.as_u128()), "recovering stake");
             wallet
                 .call(ctx.elector.recover_stake()?)
                 .await

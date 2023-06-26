@@ -18,7 +18,7 @@ impl BlockStuff {
             "wrong root hash for {id}"
         );
 
-        let block = ton_block::Block::construct_from(&mut root.into())?;
+        let block = ton_block::Block::construct_from(&mut ton_types::SliceData::load_cell(root)?)?;
         Ok(Self { id, block })
     }
 
@@ -76,7 +76,7 @@ impl BlockStuff {
         };
 
         Ok(BriefBlockInfo {
-            gen_utime: info.gen_utime().0,
+            gen_utime: info.gen_utime().as_u32(),
             prev1,
             prev2,
         })

@@ -93,10 +93,13 @@ impl CmdStateInit {
             let abi = parse_contract_abi(abi)?;
 
             if let Some(pubkey) = parse_optional_pubkey(self.pubkey)? {
-                let data = state_init.data().context("TVC doesn't contain data")?;
-                let data = ton_abi::Contract::insert_pubkey(data.into(), pubkey.as_bytes())
-                    .context("failed to insert pubkey")?;
-                state_init.set_data(data.into_cell());
+                let data = state_init.data.context("TVC doesn't contain data")?;
+                let data = ton_abi::Contract::insert_pubkey(
+                    ton_types::SliceData::load_cell(data)?,
+                    pubkey.as_bytes(),
+                )
+                .context("failed to insert pubkey")?;
+                state_init.data = Some(data.into_cell());
             }
 
             if let Some(tokens) = self.data {
@@ -107,11 +110,11 @@ impl CmdStateInit {
                     .collect::<Vec<_>>();
                 let static_params = nekoton_abi::parse_abi_tokens(&params, tokens)?;
 
-                let data = state_init.data().context("TVC doesn't contain data")?;
+                let data = state_init.data.context("TVC doesn't contain data")?;
                 let data = abi
-                    .update_data(data.into(), &static_params)
+                    .update_data(ton_types::SliceData::load_cell(data)?, &static_params)
                     .context("failed to update TVC static data")?;
-                state_init.set_data(data.into_cell());
+                state_init.data = Some(data.into_cell());
             }
         } else {
             anyhow::ensure!(
@@ -269,7 +272,7 @@ impl CmdSend {
                 ..Default::default()
             });
 
-        message.set_body(body.into());
+        message.set_body(ton_types::SliceData::load_builder(body)?);
 
         if let Some(state_init) = state_init {
             message.set_state_init(state_init);

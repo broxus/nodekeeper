@@ -315,7 +315,7 @@ impl Subscription {
         let next_shard_block_ids = next_mc_block.shard_blocks()?;
         let next_mc_utime = {
             let info = next_mc_block.block().read_info()?;
-            info.gen_utime().0
+            info.gen_utime().as_u32()
         };
 
         self.subscription_loop_step.notify_waiters(); // messages barrier

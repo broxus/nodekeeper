@@ -36,7 +36,7 @@ impl Wallet {
 
     pub async fn get_balance(&self) -> Result<Option<u128>> {
         let account = self.get_account_state().await?;
-        Ok(account.map(|state| state.storage.balance.grams.0))
+        Ok(account.map(|state| state.storage.balance.grams.as_u128()))
     }
 
     /// Sends the internal message to the recipient, returns the destination transaction
@@ -124,8 +124,8 @@ impl Wallet {
                             false,
                             Some((&self.keypair, signature_id)),
                             Some(self.address.clone()),
-                        )?
-                        .into(),
+                        )
+                        .and_then(ton_types::SliceData::load_builder)?,
                 );
 
                 if let Some(state_init) = state_init.clone() {
