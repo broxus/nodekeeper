@@ -22,7 +22,7 @@ All-in-one node management tool.
   # Add custom ppa repo
   curl https://europe-west1-apt.pkg.dev/doc/repo-signing-key.gpg \
     | sudo apt-key add -
-  echo 'deb https://europe-west1-apt.pkg.dev/projects/broxus-infrastructure broxus-deb-pub main' \
+  echo 'deb [arch=amd64] https://europe-west1-apt.pkg.dev/projects/broxus-infrastructure broxus-deb-pub main' \
     | sudo tee -a  /etc/apt/sources.list.d/broxus.list
 
   # Install the tool
