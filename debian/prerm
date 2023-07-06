@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-deluser nodekeeper -f
-groupdel nodekeeper
+deluser nodekeeper || echo "User is currently used by process"
+groupdel nodekeeper || echo "Group is currently used"
 
 #DEBHELPER#
