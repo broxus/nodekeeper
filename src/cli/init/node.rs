@@ -209,25 +209,27 @@ async fn load_global_config(
         type Err = anyhow::Error;
 
         fn from_str(s: &str) -> Result<Self> {
-            let mut value = if s.starts_with("http") || s.starts_with("file") {
-                Self::Url(s.parse()?)
-            } else {
-                Self::Path(s.into())
+            let make_path = |path: &str| -> Result<PathBuf> {
+                let path = system::make_shell_path(path);
+                anyhow::ensure!(path.exists(), "specified path does not exist");
+                Ok(path)
             };
 
-            if let Self::Url(url) = &mut value {
+            if s.starts_with("http") || s.starts_with("file") {
+                let url: Url = s.parse()?;
                 if url.scheme() == "file" {
-                    match url.to_file_path() {
-                        Ok(path) => value = Self::Path(path),
-                        Err(_) => anyhow::bail!("invalid file url"),
+                    if let Ok(path) = url.to_file_path() {
+                        if let Some(path) = path.as_os_str().to_str() {
+                            return make_path(path).map(Self::Path);
+                        }
                     }
+                    anyhow::bail!("invalid file url")
                 }
-            }
 
-            if let Self::Path(path) = &value {
-                anyhow::ensure!(path.exists(), "specified path does not exist");
+                Ok(Self::Url(url))
+            } else {
+                make_path(s).map(Self::Path)
             }
-            Ok(value)
         }
     }
 
@@ -277,8 +279,10 @@ async fn load_global_config(
                     Action::Testnet => Cow::Borrowed(GlobalConfig::TESTNET),
                     // Try to download config
                     Action::Other => loop {
+                        let completion = PathCompletion::new().with_dirs().with_files();
                         let url: PathOrUrl = Input::with_theme(theme)
                             .with_prompt("Config path or URL")
+                            .completion_with(&completion)
                             .interact_text()?;
 
                         match download_config(url).await {
@@ -811,9 +815,9 @@ fn setup_node_config_paths(
     let path = match template {
         Some(template) => template.general.node_db_path.clone(),
         None => {
-            let completion = &PathCompletion;
-            Input::with_theme(theme)
-                .with_prompt("Specify node DB path")
+            let completion = &PathCompletion::new().with_dirs();
+            let mut path = Input::with_theme(theme);
+            path.with_prompt("Specify node DB path")
                 .default(dirs.default_node_db_dir.to_string_lossy().to_string())
                 .completion_with(completion)
                 .validate_with(|input: &String| {
@@ -1151,15 +1155,40 @@ impl ProjectDirs {
     }
 }
 
-struct PathCompletion;
+#[derive(Default)]
+struct PathCompletion {
+    show_dirs: bool,
+    show_files: bool,
+}
 
 impl PathCompletion {
-    fn get_directories(&self, path: &dyn AsRef<Path>) -> Vec<String> {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn with_dirs(mut self) -> Self {
+        self.show_dirs = true;
+        self
+    }
+
+    fn with_files(mut self) -> Self {
+        self.show_files = true;
+        self
+    }
+
+    fn get_entries(&self, path: &dyn AsRef<Path>) -> Vec<String> {
         match std::fs::read_dir(path) {
             Ok(entires) => entires
                 .filter_map(|entry| match entry {
-                    Ok(entry) if entry.metadata().ok()?.is_dir() => {
-                        entry.file_name().into_string().ok()
+                    Ok(entry) => {
+                        let metadata = entry.metadata().ok()?;
+                        if self.show_dirs && metadata.is_dir()
+                            || self.show_files && metadata.is_file()
+                        {
+                            entry.file_name().into_string().ok()
+                        } else {
+                            None
+                        }
                     }
                     _ => None,
                 })
@@ -1172,23 +1201,24 @@ impl PathCompletion {
 impl Completion for PathCompletion {
     fn get(&self, input: &str) -> Option<String> {
         let with_separator = input.ends_with(std::path::is_separator);
-        let path = PathBuf::from(input);
+        let real_path = system::make_shell_path(input);
+        let original_path = PathBuf::from(input);
 
-        match path.metadata() {
+        match real_path.metadata() {
             Ok(metadata) if metadata.is_dir() => {
                 if with_separator {
-                    let dir = self.get_directories(&path).into_iter().min()?;
-                    return Some(path.join(dir).to_str()?.to_string());
+                    let dir = self.get_entries(&real_path).into_iter().min()?;
+                    return Some(original_path.join(dir).to_str()?.to_string());
                 }
             }
-            Ok(_) => return None,
-            Err(_) => {}
+            Ok(_) if !self.show_files => return None,
+            _ => {}
         }
 
-        let parent = path.parent()?;
-        let name = path.file_name()?.to_str()?;
+        let parent = real_path.parent()?;
+        let name = real_path.file_name()?.to_str()?;
 
-        let mut entires = self.get_directories(&parent);
+        let mut entires = self.get_entries(&parent);
         entires.sort_unstable();
 
         let mut entires_iter = entires.iter().skip_while(|item| item.as_str() < name);
@@ -1202,6 +1232,6 @@ impl Completion for PathCompletion {
             None
         }?;
 
-        Some(parent.join(name).to_str()?.to_string())
+        Some(original_path.parent()?.join(name).to_str()?.to_string())
     }
 }

@@ -45,6 +45,19 @@ pub fn home_dir(uid: u32) -> Option<PathBuf> {
     }
 }
 
+pub fn make_shell_path(path: &str) -> PathBuf {
+    // Replace `~` with a path to the home directory
+    if let Some(path_after_tilde) = path.strip_prefix('~') {
+        if path_after_tilde.is_empty() || path_after_tilde.starts_with('/') {
+            if let Some(home) = home::home_dir() {
+                return home.join(path_after_tilde.trim_start_matches('/'));
+            }
+        }
+    }
+
+    PathBuf::from(path)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct FsStats {
     pub free_space: u64,
