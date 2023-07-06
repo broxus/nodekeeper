@@ -9,7 +9,8 @@ use dialoguer::theme::Theme;
 use dialoguer::Select;
 use tokio::process::Command;
 
-use crate::cli::{CliContext, ProjectDirs, VALIDATOR_MANAGER_SERVICE, VALIDATOR_SERVICE};
+use crate::cli::{CliContext, ProjectDirs};
+use crate::dirs::{VALIDATOR_EXPORTER_SERVICE, VALIDATOR_MANAGER_SERVICE, VALIDATOR_SERVICE};
 use crate::util::*;
 
 #[derive(FromArgs)]
@@ -117,6 +118,10 @@ pub fn prepare_services(
     dirs.create_systemd_validator_manager_service(&user)?;
     print_service(&dirs.validator_manager_service);
 
+    // Create validator exporter service
+    dirs.create_systemd_validator_exporter_service(&user)?;
+    print_service(&dirs.validator_exporter_service);
+
     Ok(())
 }
 
@@ -125,7 +130,11 @@ pub async fn start_services(
     enable: Option<bool>,
     start: Option<bool>,
 ) -> Result<()> {
-    let services = [VALIDATOR_SERVICE, VALIDATOR_MANAGER_SERVICE];
+    let services = [
+        VALIDATOR_SERVICE,
+        VALIDATOR_MANAGER_SERVICE,
+        VALIDATOR_EXPORTER_SERVICE,
+    ];
 
     let enabled = match enable {
         Some(enable) => enable,
@@ -187,6 +196,30 @@ WantedBy=multi-user.target
     };
 }
 
+macro_rules! validator_exporter_service {
+    () => {
+        r#"[Unit]
+Description=Validator Metrics Exporter
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=1
+User={user}
+Environment=PORT=10000
+Environment=INTERVAL=10
+ExecStart={nodekeeper_binary} exporter \
+    --addr 0.0.0.0:${{PORT}} \
+    --interval ${{INTERVAL}}
+
+[Install]
+WantedBy=multi-user.target
+"#
+    };
+}
+
 impl ProjectDirs {
     fn create_systemd_validator_service(&self, user: &str) -> Result<()> {
         let node = std::fs::canonicalize(&self.node_binary)
@@ -218,6 +251,20 @@ impl ProjectDirs {
             root_dir = root_dir.display(),
         );
         std::fs::write(&self.validator_manager_service, validator_manager_service)
+            .context("failed to create systemd validator manager service")?;
+
+        Ok(())
+    }
+
+    fn create_systemd_validator_exporter_service(&self, user: &str) -> Result<()> {
+        let current_exe = std::env::current_exe()?;
+
+        let validator_exporter_service = format!(
+            validator_exporter_service!(),
+            user = user,
+            nodekeeper_binary = current_exe.display(),
+        );
+        std::fs::write(&self.validator_exporter_service, validator_exporter_service)
             .context("failed to create systemd validator manager service")?;
 
         Ok(())

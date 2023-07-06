@@ -4,6 +4,7 @@ const ENV: &str = "NODEKEEPER_ROOT";
 
 pub const VALIDATOR_SERVICE: &str = "validator";
 pub const VALIDATOR_MANAGER_SERVICE: &str = "validator-manager";
+pub const VALIDATOR_EXPORTER_SERVICE: &str = "validator-exporter";
 
 pub struct ProjectDirs {
     pub app_config: PathBuf,
@@ -21,6 +22,7 @@ pub struct ProjectDirs {
     pub root: PathBuf,
     pub validator_service: PathBuf,
     pub validator_manager_service: PathBuf,
+    pub validator_exporter_service: PathBuf,
 }
 
 impl ProjectDirs {
@@ -36,6 +38,8 @@ impl ProjectDirs {
         let validator_service = systemd_root.join(format!("{VALIDATOR_SERVICE}.service"));
         let validator_manager_service =
             systemd_root.join(format!("{VALIDATOR_MANAGER_SERVICE}.service"));
+        let validator_exporter_service =
+            systemd_root.join(format!("{VALIDATOR_EXPORTER_SERVICE}.service"));
 
         let keys_dir = root.join("keys");
         let validator_keys = keys_dir.join("vld.keys.json");
@@ -62,6 +66,7 @@ impl ProjectDirs {
             root,
             validator_service,
             validator_manager_service,
+            validator_exporter_service,
         }
     }
 

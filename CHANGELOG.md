@@ -1,3 +1,19 @@
+# 0.2.5 (2023-07-06)
+
+### Added
+
+- Added `validator-exporter` systemd service for metrics.
+
+  It listens on port `10000` by default. You can override it with:
+  ```bash
+  sudo systemctl edit validator-exporter
+  ```
+  ```ini
+  [Service]
+  Environment=PORT=10000
+  Environment=INTERVAL=10
+  ```
+
 # 0.2.4 (2023-04-05)
 
 ### Added

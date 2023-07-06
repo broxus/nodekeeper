@@ -65,6 +65,7 @@ nodekeeper init
 # Start services
 sudo systemctl restart validator
 sudo systemctl restart validator-manager
+sudo systemctl restart validator-exporter
 ```
 
 <details><summary><b>For cargo installation:</b></summary>

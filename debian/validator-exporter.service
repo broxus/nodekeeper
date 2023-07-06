@@ -1,0 +1,18 @@
+[Unit]
+Description=Validator Metrics Exporter
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=1
+User=nodekeeper
+Environment=PORT=10000
+Environment=INTERVAL=10
+ExecStart=/usr/local/bin/nodekeeper exporter \
+    --addr 0.0.0.0:${PORT} \
+    --interval ${INTERVAL}
+
+[Install]
+WantedBy=multi-user.target
