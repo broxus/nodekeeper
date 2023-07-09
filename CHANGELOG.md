@@ -1,3 +1,13 @@
+# 0.2.6 (2023-07-09)
+
+### Changed
+
+- The `validator` service will not be restarted during an update.
+
+### Fixed
+
+- Fixed file path autocompletion and `~/` now works as in shell.
+
 # 0.2.5 (2023-07-06)
 
 ### Added
