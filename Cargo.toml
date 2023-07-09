@@ -1,7 +1,7 @@
 [package]
 name = "nodekeeper"
 description = "All-in-one node management tool."
-version = "0.2.5"
+version = "0.2.6"
 authors = ["Ivan Kalinin <i.kalinin@dexpa.io>"]
 repository = "https://github.com/broxus/nodekeeper"
 edition = "2021"
@@ -96,7 +96,7 @@ assets = [
 conf-files = ["/etc/nodekeeper/"]
 maintainer-scripts = "debian/"
 systemd-units = [
-    { unit-name = "validator", enable = true, start = false },
+    { unit-name = "validator", enable = true, start = false, stop-on-upgrade = false },
     { unit-name = "validator-manager", enable = true, start = false },
     { unit-name = "validator-exporter", enable = true, start = false },
 ]
