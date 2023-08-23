@@ -1,16 +1,224 @@
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use argh::FromArgs;
 use tokio_util::sync::CancellationToken;
 
 use super::CliContext;
+use crate::config::{AppConfigValidator, StoredKeys};
+use crate::contracts::{depool, wallet, InternalMessage};
+use crate::network::{NodeTcpRpc, NodeUdpRpc, Subscription};
+use crate::util::*;
 use crate::validator::{ValidationManager, ValidationParams};
 
 #[derive(FromArgs)]
-/// Validation manager service
+/// Validator management stuff
 #[argh(subcommand, name = "validator")]
 pub struct Cmd {
+    #[argh(subcommand)]
+    subcommand: SubCmd,
+}
+
+impl Cmd {
+    pub async fn run(self, ctx: CliContext) -> Result<()> {
+        match self.subcommand {
+            SubCmd::Balance(cmd) => cmd.run(ctx).await,
+            SubCmd::Withdraw(cmd) => cmd.run(ctx).await,
+            SubCmd::Run(cmd) => cmd.run(ctx).await,
+        }
+    }
+}
+
+#[derive(FromArgs)]
+#[argh(subcommand)]
+enum SubCmd {
+    Balance(CmdBalance),
+    Withdraw(CmdWithdraw),
+    Run(CmdRun),
+}
+
+#[derive(FromArgs)]
+/// Fetches the validator wallet balance
+#[argh(subcommand, name = "balance")]
+struct CmdBalance {}
+
+impl CmdBalance {
+    async fn run(self, ctx: CliContext) -> Result<()> {
+        // Load config
+        let mut config = ctx.load_config()?;
+        let validator = config
+            .validator
+            .take()
+            .context("validator entry not found in the app config")?;
+
+        // Prepare RPC client
+        let node_rpc = NodeTcpRpc::new(config.control()?).await?;
+
+        // Prepare helpers
+        let get_account_balance = |address: &ton_block::MsgAddressInt| {
+            let node_rpc = &node_rpc;
+            let address = address.clone();
+            async move {
+                let state = node_rpc.get_shard_account_state(&address).await?;
+                Ok::<_, anyhow::Error>(match state.read_account()? {
+                    ton_block::Account::Account(account) => Some(account.storage.balance.grams),
+                    ton_block::Account::AccountNone => None,
+                })
+            }
+        };
+
+        let make_balance_entry =
+            |address: &ton_block::MsgAddressInt, balance: Option<ton_block::Grams>| {
+                serde_json::json!({
+                    "address": address.to_string(),
+                    "balance": balance.as_ref().map(ToString::to_string)
+                })
+            };
+
+        // Fetch balance
+        let output = match validator {
+            // Just wallet balance for a single validator
+            AppConfigValidator::Single(single) => {
+                let wallet_balance = get_account_balance(&single.address).await?;
+
+                serde_json::json!({
+                    "wallet": make_balance_entry(&single.address, wallet_balance)
+                })
+            }
+            // All balances for depool setup
+            AppConfigValidator::DePool(config) => {
+                let wallet_balance = get_account_balance(&config.owner).await?;
+
+                let depool = node_rpc.get_shard_account_state(&config.depool).await?;
+
+                let mut depool_balance = None;
+                let mut proxies = None;
+                if let ton_block::Account::Account(ref state) = depool.read_account()? {
+                    depool_balance = Some(state.storage.balance.grams);
+
+                    // Get balances of proxies if depool is deployed
+                    if matches!(
+                        &state.storage.state,
+                        ton_block::AccountState::AccountActive { .. }
+                    ) {
+                        let state = depool::DePoolState {
+                            state,
+                            ty: config.depool_type,
+                        };
+
+                        let info = state.get_info()?;
+                        let proxies = proxies.insert(Vec::with_capacity(info.proxies.len()));
+                        for proxy in info.proxies {
+                            let proxy_balance = get_account_balance(&proxy).await?;
+                            proxies.push(make_balance_entry(&proxy, proxy_balance));
+                        }
+                    }
+                }
+
+                serde_json::json!({
+                    "wallet": make_balance_entry(&config.owner, wallet_balance),
+                    "depool": make_balance_entry(&config.depool, depool_balance),
+                    "proxies": proxies,
+                })
+            }
+        };
+
+        print_output(output);
+        Ok(())
+    }
+}
+
+#[derive(FromArgs)]
+/// Withdraws tokens from the validator wallet
+#[argh(subcommand, name = "withdraw")]
+struct CmdWithdraw {
+    /// destination account address
+    #[argh(option)]
+    dst: String,
+
+    /// amount to withdraw in nano tokens
+    #[argh(option)]
+    amount: u128,
+}
+
+impl CmdWithdraw {
+    async fn run(self, ctx: CliContext) -> Result<()> {
+        // Load config
+        let mut config = ctx.load_config()?;
+        let validator = config
+            .validator
+            .take()
+            .context("validator entry not found in the app config")?;
+
+        // Prepare RPC clients
+        let node_tcp_rpc = NodeTcpRpc::new(config.control()?)
+            .await
+            .context("failed to build node TCP client")?;
+        let node_udp_rpc = NodeUdpRpc::new(config.adnl()?)
+            .await
+            .context("failed to build node UDP client")?;
+
+        let subscription = Subscription::new(node_tcp_rpc, node_udp_rpc);
+        subscription.ensure_ready().await?;
+
+        // Parse arguments
+        let dst = parse_address(&self.dst)?;
+
+        // Prepare wallet
+        let keypair = StoredKeys::load(&ctx.dirs.validator_keys)
+            .context("failed to load validator wallet keys")?
+            .as_keypair();
+
+        let wallet_address = match validator {
+            AppConfigValidator::Single(single) => single.address,
+            AppConfigValidator::DePool(depool) => depool.owner,
+        };
+
+        let wallet =
+            wallet::Wallet::new(wallet_address.workchain_id() as i8, keypair, subscription);
+        anyhow::ensure!(
+            wallet.address() == &wallet_address,
+            "validator wallet address mismatch"
+        );
+
+        // Check wallet balance
+        let wallet_balance = wallet.get_balance().await?.unwrap_or_default();
+        anyhow::ensure!(
+            self.amount < wallet_balance,
+            "wallet balance is not enough ({wallet_balance} nano tokens)"
+        );
+
+        // Send external message and wait until it is delivered
+        let TransactionWithHash {
+            hash: tx_hash,
+            data: tx,
+        } = wallet
+            .transfer(InternalMessage {
+                dst,
+                amount: self.amount,
+                payload: Default::default(),
+            })
+            .await?;
+
+        // Parse transaction
+        let msg_hash = tx
+            .in_msg
+            .context("external inbound message not found")?
+            .hash();
+
+        // Done
+        print_output(serde_json::json!({
+            "tx_hash": tx_hash.to_hex_string(),
+            "msg_hash": msg_hash.to_hex_string(),
+        }));
+        Ok(())
+    }
+}
+
+#[derive(FromArgs)]
+/// Starts managing validation
+#[argh(subcommand, name = "run")]
+struct CmdRun {
     /// max timediff (in seconds). 120 seconds default
     #[argh(option, default = "120")]
     max_time_diff: u16,
@@ -52,8 +260,8 @@ pub struct Cmd {
     force: bool,
 }
 
-impl Cmd {
-    pub async fn run(mut self, ctx: CliContext) -> Result<()> {
+impl CmdRun {
+    async fn run(mut self, ctx: CliContext) -> Result<()> {
         // Start listening termination signals
         let signal_rx = broxus_util::any_signal(broxus_util::TERMINATION_SIGNALS);
 

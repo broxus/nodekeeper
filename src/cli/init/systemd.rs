@@ -188,7 +188,7 @@ Type=simple
 Restart=always
 RestartSec=1
 User={user}
-ExecStart={nodekeeper_binary} --root {root_dir} validator
+ExecStart={nodekeeper_binary} --root {root_dir} validator run
 
 [Install]
 WantedBy=multi-user.target

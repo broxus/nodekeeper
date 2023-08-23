@@ -21,8 +21,8 @@ console = "0.15"
 ctr = "0.9"
 dashmap = "5.4.0"
 dialoguer = { version = "0.10", features = ["completion"] }
-everscale-crypto = { version = "0.1.4", features = ["tl-proto"] }
-everscale-network = { version = "0.4", default-features = false, features = ["rldp", "dht"] }
+everscale-crypto = { version = "0.2", features = ["tl-proto"] }
+everscale-network = { version = "0.5", default-features = false, features = ["rldp", "dht"] }
 futures-util = "0.3"
 generic-array = "0.14"
 hex = "0.4"
@@ -43,9 +43,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_path_to_error = "0.1"
 sha2 = "0.9"
-sysinfo = "0.28"
+sysinfo = "0.29"
 thiserror = "1.0.37"
-tl-proto = "0.3.12"
+tl-proto = "0.4"
 tokio = { version = "1", features = [
     "macros",
     "time",
