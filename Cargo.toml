@@ -17,8 +17,8 @@ async-trait = "0.1.57"
 base64 = "0.13.0"
 broxus-util = { version = "0.2", default-features = false, features = ["serde", "signal"] }
 bytes = "1.2"
-console = "0.15"
 ctr = "0.9"
+ctrlc = "3.4"
 dashmap = "5.4.0"
 dialoguer = { version = "0.10", features = ["completion"] }
 everscale-crypto = { version = "0.2", features = ["tl-proto"] }

@@ -5,6 +5,7 @@ use argh::FromArgs;
 
 use crate::config::*;
 use crate::dirs::*;
+use crate::util::*;
 
 pub mod contract;
 pub mod exporter;
@@ -33,9 +34,9 @@ impl App {
         };
 
         match self.command {
-            Command::Init(cmd) => cmd.run(ctx).await,
+            Command::Init(cmd) => invoke_as_cli(cmd.run(ctx)).await,
             Command::Validator(cmd) => cmd.run(ctx).await,
-            Command::Contract(cmd) => cmd.run(ctx).await,
+            Command::Contract(cmd) => invoke_as_cli(cmd.run(ctx)).await,
             Command::Exporter(cmd) => cmd.run(ctx).await,
             Command::Node(cmd) => cmd.run(ctx).await,
             Command::Seed(cmd) => cmd.run(),

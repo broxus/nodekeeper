@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use argh::FromArgs;
-use console::style;
+use dialoguer::console::style;
 use tokio_util::sync::CancellationToken;
 
 use super::CliContext;
@@ -24,7 +24,7 @@ impl Cmd {
     pub async fn run(self, ctx: CliContext) -> Result<()> {
         match self.subcommand {
             SubCmd::Balance(cmd) => cmd.run(ctx).await,
-            SubCmd::Withdraw(cmd) => cmd.run(ctx).await,
+            SubCmd::Withdraw(cmd) => invoke_as_cli(cmd.run(ctx)).await,
             SubCmd::Run(cmd) => cmd.run(ctx).await,
         }
     }
@@ -217,10 +217,11 @@ impl CmdWithdraw {
             );
 
             if !self.force
-                && !dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
-                    .with_prompt("Do you really want to send tokens?")
-                    .default(false)
-                    .interact()?
+                && !confirm(
+                    &dialoguer::theme::ColorfulTheme::default(),
+                    false,
+                    "Do you really want to send tokens?",
+                )?
             {
                 return Ok(());
             }

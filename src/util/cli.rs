@@ -1,8 +1,10 @@
+use std::future::Future;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
+use dialoguer::console;
 use dialoguer::theme::Theme;
 use tokio::process::Command;
 use ton_block::Deserializable;
@@ -213,4 +215,39 @@ pub fn is_terminal() -> bool {
 
     static IS_TERMINAL: OnceBox<bool> = OnceBox::new();
     *IS_TERMINAL.get_or_init(|| Box::new(console::user_attended()))
+}
+
+pub async fn invoke_as_cli<F>(f: F) -> Result<()>
+where
+    F: Future<Output = Result<()>>,
+{
+    setup_handlers();
+    f.await.or_else(ignore_interrupt)
+}
+
+fn setup_handlers() {
+    if !is_terminal() {
+        return;
+    }
+
+    ctrlc::set_handler(|| {
+        let term = dialoguer::console::Term::stdout();
+        let _ = term.show_cursor();
+    })
+    .expect("Error setting Ctrl-C handler");
+}
+
+fn ignore_interrupt(e: anyhow::Error) -> Result<()> {
+    if !is_terminal() {
+        return Err(e);
+    }
+
+    if let Some(e) = e.downcast_ref::<std::io::Error>() {
+        if e.kind() == std::io::ErrorKind::Interrupted {
+            eprintln!();
+            return Ok(());
+        }
+    }
+
+    Err(e)
 }
