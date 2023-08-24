@@ -2,11 +2,12 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use argh::FromArgs;
+use console::style;
 use tokio_util::sync::CancellationToken;
 
 use super::CliContext;
 use crate::config::{AppConfigValidator, StoredKeys};
-use crate::contracts::{depool, wallet, InternalMessage};
+use crate::contracts::{depool, wallet, InternalMessage, ONE_EVER};
 use crate::network::{NodeTcpRpc, NodeUdpRpc, Subscription};
 use crate::util::*;
 use crate::validator::{ValidationManager, ValidationParams};
@@ -133,12 +134,20 @@ impl CmdBalance {
 #[argh(subcommand, name = "withdraw")]
 struct CmdWithdraw {
     /// destination account address
-    #[argh(option)]
-    dst: String,
+    #[argh(positional)]
+    dest: String,
 
-    /// amount to withdraw in nano tokens
-    #[argh(option)]
+    /// amount to withdraw in tokens
+    #[argh(positional)]
     amount: u128,
+
+    /// never prompt
+    #[argh(switch, short = 'f')]
+    force: bool,
+
+    /// interpret amount as amount in nano tokens
+    #[argh(switch)]
+    nano: bool,
 }
 
 impl CmdWithdraw {
@@ -149,6 +158,7 @@ impl CmdWithdraw {
             .validator
             .take()
             .context("validator entry not found in the app config")?;
+        let currency = config.currency();
 
         // Prepare RPC clients
         let node_tcp_rpc = NodeTcpRpc::new(config.control()?)
@@ -162,7 +172,11 @@ impl CmdWithdraw {
         subscription.ensure_ready().await?;
 
         // Parse arguments
-        let dst = parse_address(&self.dst)?;
+        let dest = parse_address(&self.dest)?;
+        let mut amount = self.amount;
+        if !self.nano {
+            amount = amount.saturating_mul(ONE_EVER);
+        }
 
         // Prepare wallet
         let keypair = StoredKeys::load(&ctx.dirs.validator_keys)
@@ -184,9 +198,33 @@ impl CmdWithdraw {
         // Check wallet balance
         let wallet_balance = wallet.get_balance().await?.unwrap_or_default();
         anyhow::ensure!(
-            self.amount < wallet_balance,
-            "wallet balance is not enough ({wallet_balance} nano tokens)"
+            amount < wallet_balance,
+            "wallet balance is not enough ({} {currency})",
+            Tokens(wallet_balance)
         );
+
+        if is_terminal() {
+            eprintln!(
+                "{}\n{}\n{}\n{}\n\n{}\n{}\n{}\n{}\n",
+                style("Wallet address:").green().bold(),
+                style(wallet.address()).bold(),
+                style("Wallet balance:").green().bold(),
+                style(format!("{} {currency}", Tokens(wallet_balance))).bold(),
+                style("Target address:").green().bold(),
+                style(&dest).bold(),
+                style("Amount to send:").green().bold(),
+                style(format!("{} {currency}", Tokens(amount))).bold()
+            );
+
+            if !self.force
+                && !dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
+                    .with_prompt("Do you really want to send tokens?")
+                    .default(false)
+                    .interact()?
+            {
+                return Ok(());
+            }
+        }
 
         // Send external message and wait until it is delivered
         let TransactionWithHash {
@@ -194,8 +232,8 @@ impl CmdWithdraw {
             data: tx,
         } = wallet
             .transfer(InternalMessage {
-                dst,
-                amount: self.amount,
+                dst: dest,
+                amount,
                 payload: Default::default(),
             })
             .await?;
