@@ -6,6 +6,7 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use argh::FromArgs;
+use dialoguer::console::style;
 use dialoguer::theme::Theme;
 use dialoguer::{Completion, Input, Select};
 use reqwest::Url;
@@ -1028,7 +1029,6 @@ fn check_systemd_service(dirs: &ProjectDirs) -> Result<()> {
 }
 
 fn check_resources(node_config: &NodeConfig, output: &mut Output) -> Result<()> {
-    use console::style;
     use sysinfo::{System, SystemExt};
 
     fn format_gb(bytes: u64) -> String {

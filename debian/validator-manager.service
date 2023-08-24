@@ -8,7 +8,7 @@ Type=simple
 Restart=always
 RestartSec=1
 User=nodekeeper
-ExecStart=/usr/local/bin/nodekeeper --root /var/nodekeeper validator
+ExecStart=/usr/local/bin/nodekeeper --root /var/nodekeeper validator run
 
 [Install]
 WantedBy=multi-user.target

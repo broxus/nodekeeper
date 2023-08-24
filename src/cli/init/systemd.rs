@@ -4,7 +4,7 @@ use std::process::Stdio;
 
 use anyhow::{Context, Result};
 use argh::FromArgs;
-use console::style;
+use dialoguer::console::style;
 use dialoguer::theme::Theme;
 use dialoguer::Select;
 use tokio::process::Command;
@@ -30,7 +30,7 @@ pub struct Cmd {
 
 impl Cmd {
     pub async fn run(self, theme: &dyn Theme, ctx: &CliContext) -> Result<()> {
-        if self.user.is_none() && !console::user_attended() {
+        if self.user.is_none() && !is_terminal() {
             anyhow::bail!("`user` param is required when running without tty");
         }
 
@@ -188,7 +188,7 @@ Type=simple
 Restart=always
 RestartSec=1
 User={user}
-ExecStart={nodekeeper_binary} --root {root_dir} validator
+ExecStart={nodekeeper_binary} --root {root_dir} validator run
 
 [Install]
 WantedBy=multi-user.target

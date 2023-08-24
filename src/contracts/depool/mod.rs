@@ -69,8 +69,9 @@ impl DePool {
             .subscription
             .get_account_state(&self.address)
             .await
-            .context("failed to get DePool state")? else {
-            return Ok(false)
+            .context("failed to get DePool state")?
+        else {
+            return Ok(false);
         };
 
         match account.storage.state {
@@ -134,21 +135,17 @@ impl DePool {
             .await?
             .context("DePool not deployed")?;
 
+        let state = DePoolState {
+            state: &account,
+            ty: self.ty,
+        };
+
         let mut messages = Vec::new();
 
-        let depool_info = self.get_info(&account)?;
+        let depool_info = state.get_info()?;
 
         // Check depool balance
-        let depool_balance = {
-            let tokens = self.run_local(&account, common::get_depool_balance(), &[])?;
-            match tokens.into_iter().next() {
-                Some(ton_abi::Token {
-                    value: ton_abi::TokenValue::Int(ton_abi::Int { number, .. }),
-                    ..
-                }) => number,
-                _ => return Err(nekoton_abi::UnpackerError::InvalidAbi.into()),
-            }
-        };
+        let depool_balance = state.get_depool_balance()?;
 
         let critical_balance = num::BigInt::from(Self::CRITICAL_BALANCE);
         if depool_balance <= critical_balance {
@@ -219,60 +216,22 @@ impl DePool {
         state: &ton_block::AccountStuff,
         addr: &ton_block::MsgAddressInt,
     ) -> Result<Option<ParticipantInfo>> {
-        const ERR_NOT_PARTICIPANT: i32 = 116;
-
-        let result = match self.ty {
-            DePoolType::DefaultV3 => common::get_participant_info(),
-            DePoolType::StEverV1 | DePoolType::StEverV2 => stever::get_participant_info(),
-        }
-        .run_local(
-            &SimpleClock,
-            state.clone(),
-            &[addr.clone().token_value().named("addr")],
-        )?;
-
-        if result.result_code == ERR_NOT_PARTICIPANT {
-            Ok(None)
-        } else {
-            Ok(Some(result.tokens.context("no outputs")?.unpack()?))
-        }
+        DePoolState { state, ty: self.ty }.get_participant_info(addr)
     }
 
     pub fn get_info(&self, state: &ton_block::AccountStuff) -> Result<DePoolInfo> {
-        let info = self
-            .run_local(state, common::get_depool_info(), &[])?
-            .unpack()?;
-        Ok(info)
+        DePoolState { state, ty: self.ty }.get_info()
     }
 
     pub fn get_rounds(&self, state: &ton_block::AccountStuff) -> Result<RoundsMap> {
-        let rounds = self
-            .run_local(state, common::get_rounds(), &[])?
-            .unpack_first()?;
-        Ok(rounds)
+        DePoolState { state, ty: self.ty }.get_rounds()
     }
 
     pub fn get_allowed_participants(
         &self,
         state: &ton_block::AccountStuff,
     ) -> Result<Vec<ton_block::MsgAddressInt>> {
-        self.ensure_stever()?;
-        let addresses: stever::ParticipantsMap = self
-            .run_local(state, stever::allowed_participants(), &[])?
-            .unpack_first()?;
-        Ok(addresses.into_keys().collect())
-    }
-
-    fn run_local(
-        &self,
-        state: &ton_block::AccountStuff,
-        function: &ton_abi::Function,
-        inputs: &[ton_abi::Token],
-    ) -> Result<Vec<ton_abi::Token>> {
-        function
-            .run_local(&SimpleClock, state.clone(), inputs)?
-            .tokens
-            .context("no outputs")
+        DePoolState { state, ty: self.ty }.get_allowed_participants()
     }
 
     pub async fn get_state(&self) -> Result<ton_block::AccountStuff> {
@@ -336,6 +295,82 @@ impl DePoolType {
             state_init.data = Some(data.into_cell());
         }
         Ok(state_init)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct DePoolState<'a> {
+    pub state: &'a ton_block::AccountStuff,
+    pub ty: DePoolType,
+}
+
+impl DePoolState<'_> {
+    pub fn get_depool_balance(&self) -> Result<num::BigInt> {
+        let tokens = self.run_local(common::get_depool_balance(), &[])?;
+        match tokens.into_iter().next() {
+            Some(ton_abi::Token {
+                value: ton_abi::TokenValue::Int(ton_abi::Int { number, .. }),
+                ..
+            }) => Ok(number),
+            _ => Err(nekoton_abi::UnpackerError::InvalidAbi.into()),
+        }
+    }
+
+    pub fn get_participant_info(
+        &self,
+        addr: &ton_block::MsgAddressInt,
+    ) -> Result<Option<ParticipantInfo>> {
+        const ERR_NOT_PARTICIPANT: i32 = 116;
+
+        let result = match self.ty {
+            DePoolType::DefaultV3 => common::get_participant_info(),
+            DePoolType::StEverV1 | DePoolType::StEverV2 => stever::get_participant_info(),
+        }
+        .run_local(
+            &SimpleClock,
+            self.state.clone(),
+            &[addr.clone().token_value().named("addr")],
+        )?;
+
+        if result.result_code == ERR_NOT_PARTICIPANT {
+            Ok(None)
+        } else {
+            Ok(Some(result.tokens.context("no outputs")?.unpack()?))
+        }
+    }
+
+    pub fn get_info(&self) -> Result<DePoolInfo> {
+        let info = self.run_local(common::get_depool_info(), &[])?.unpack()?;
+        Ok(info)
+    }
+
+    pub fn get_rounds(&self) -> Result<RoundsMap> {
+        let rounds = self.run_local(common::get_rounds(), &[])?.unpack_first()?;
+        Ok(rounds)
+    }
+
+    pub fn get_allowed_participants(&self) -> Result<Vec<ton_block::MsgAddressInt>> {
+        self.ensure_stever()?;
+        let addresses: stever::ParticipantsMap = self
+            .run_local(stever::allowed_participants(), &[])?
+            .unpack_first()?;
+        Ok(addresses.into_keys().collect())
+    }
+
+    pub fn run_local(
+        &self,
+        function: &ton_abi::Function,
+        inputs: &[ton_abi::Token],
+    ) -> Result<Vec<ton_abi::Token>> {
+        function
+            .run_local(&SimpleClock, self.state.clone(), inputs)?
+            .tokens
+            .context("no outputs")
+    }
+
+    fn ensure_stever(&self) -> Result<()> {
+        anyhow::ensure!(self.ty.is_stever(), "expected StEver depool");
+        Ok(())
     }
 }
 

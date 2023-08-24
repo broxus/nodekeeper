@@ -4,7 +4,7 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use argh::FromArgs;
 use broxus_util::serde_string;
-use console::style;
+use dialoguer::console::style;
 use dialoguer::theme::Theme;
 use dialoguer::{Input, Select};
 use nekoton_utils::serde_address;
