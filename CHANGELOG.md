@@ -1,3 +1,20 @@
+# 0.2.7 (2023-08-24)
+
+### Added
+
+- Added `nodekeeper validator balance` subcommand which outputs a structured info about
+  validator wallet(s) and address(es).
+- Added `nodekeeper validator withdraw <dest> <amount>` subcommand which allows to easily
+  withdraw tokens from the validator wallet.
+
+### Changed
+
+- Validator manager subcommand moved from `nodekeeper validator` to `nodekeeper validator run`.
+
+### Fixed
+
+- Fixed hidden cursor state after `ctrl+C` interruption in prompts.
+
 # 0.2.6 (2023-07-09)
 
 ### Changed
