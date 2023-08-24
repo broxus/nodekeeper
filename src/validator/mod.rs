@@ -373,7 +373,7 @@ impl ElectionsContext<'_> {
     async fn check_can_be_elected(&mut self, address: &ton_block::MsgAddressInt) -> Result<bool> {
         self.elector_data = self.elector.get_data().await?;
         let Some(current_election_id) = self.elector_data.election_id() else {
-            return Ok(false)
+            return Ok(false);
         };
 
         Ok(current_election_id == self.election_id && !self.elector_data.elected(address))

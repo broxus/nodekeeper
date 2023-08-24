@@ -189,8 +189,12 @@ impl ElectorData {
             return false;
         }
 
-        let Some(current_election) = &self.inner.current_election.0 else { return false };
-        let Ok((_, address)) = split_address(address) else { return false };
+        let Some(current_election) = &self.inner.current_election.0 else {
+            return false;
+        };
+        let Ok((_, address)) = split_address(address) else {
+            return false;
+        };
 
         current_election
             .members

@@ -52,11 +52,15 @@ impl Wallet {
             .data
             .out_msgs
             .iterate_slices(|msg| {
-                let Some(msg) = msg.reference_opt(0) else { return Ok(true) };
+                let Some(msg) = msg.reference_opt(0) else {
+                    return Ok(true);
+                };
 
                 let msg_hash = msg.repr_hash();
                 let msg = ton_block::Message::construct_from_cell(msg)?;
-                let Some(header) = msg.int_header() else { return Ok(true) };
+                let Some(header) = msg.int_header() else {
+                    return Ok(true);
+                };
 
                 if header.dst == dst {
                     out_msg_hash = Some(msg_hash);
@@ -70,7 +74,9 @@ impl Wallet {
 
         while let Some(tx) = dst_transactions.recv().await {
             tracing::debug!(source_tx_hash = ?src_tx.hash, tx_hash = ?tx.hash, "new transaction found");
-            let Some(msg) = tx.data.in_msg_cell() else { continue; };
+            let Some(msg) = tx.data.in_msg_cell() else {
+                continue;
+            };
             if msg.repr_hash() == out_msg_hash {
                 return Ok(tx);
             }

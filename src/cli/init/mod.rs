@@ -33,7 +33,9 @@ pub struct Cmd {
 impl Cmd {
     pub async fn run(self, ctx: CliContext) -> Result<()> {
         fn load_template(template: Option<PathBuf>) -> Result<Option<Template>> {
-            let Some(path) = &template else { return Ok(None) };
+            let Some(path) = &template else {
+                return Ok(None);
+            };
 
             let data = std::fs::read_to_string(path).context("failed to read template")?;
             let template = if matches!(path.extension(), Some(ext) if ext == "toml") {

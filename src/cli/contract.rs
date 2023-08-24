@@ -331,7 +331,7 @@ fn parse_message<'a, 'b: 'a>(
     }
 
     let Some(mut body) = msg.body() else {
-        return Ok(None)
+        return Ok(None);
     };
 
     let Ok(function_id) = body.get_next_u32() else {
