@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 use super::CliContext;
 use crate::config::{AppConfigValidator, StoredKeys};
 use crate::contracts::{depool, wallet, InternalMessage, ONE_EVER};
-use crate::network::{NodeTcpRpc, NodeUdpRpc, Subscription};
+use crate::network::{ConfigWithId, NodeTcpRpc, NodeUdpRpc, Subscription};
 use crate::util::*;
 use crate::validator::{ValidationManager, ValidationParams};
 
@@ -55,6 +55,13 @@ impl CmdBalance {
         // Prepare RPC client
         let node_rpc = NodeTcpRpc::new(config.control()?).await?;
 
+        // Get current network config params
+        let ConfigWithId {
+            config: blockchain_config,
+            ..
+        } = node_rpc.get_config_all().await?;
+        let blockchain_config = &ton_executor::BlockchainConfig::with_config(blockchain_config, 0)?;
+
         // Prepare helpers
         let get_account_balance = |address: &ton_block::MsgAddressInt| {
             let node_rpc = &node_rpc;
@@ -62,17 +69,27 @@ impl CmdBalance {
             async move {
                 let state = node_rpc.get_shard_account_state(&address).await?;
                 Ok::<_, anyhow::Error>(match state.read_account()? {
-                    ton_block::Account::Account(account) => Some(account.storage.balance.grams),
+                    ton_block::Account::Account(account) => {
+                        let storage_fee = blockchain_config.calc_storage_fee(
+                            &account.storage_stat,
+                            address.is_masterchain(),
+                            broxus_util::now(),
+                        )?;
+
+                        Some((account.storage.balance.grams, storage_fee))
+                    }
                     ton_block::Account::AccountNone => None,
                 })
             }
         };
 
         let make_balance_entry =
-            |address: &ton_block::MsgAddressInt, balance: Option<ton_block::Grams>| {
+            |address: &ton_block::MsgAddressInt,
+             balance: Option<(ton_block::Grams, ton_block::Grams)>| {
                 serde_json::json!({
                     "address": address.to_string(),
-                    "balance": balance.as_ref().map(ToString::to_string)
+                    "balance": balance.as_ref().map(|(b, _)| b.to_string()),
+                    "storage_fee": balance.as_ref().map(|(_, f)| f.to_string()),
                 })
             };
 
@@ -95,7 +112,14 @@ impl CmdBalance {
                 let mut depool_balance = None;
                 let mut proxies = None;
                 if let ton_block::Account::Account(ref state) = depool.read_account()? {
-                    depool_balance = Some(state.storage.balance.grams);
+                    depool_balance = {
+                        let storage_fee = blockchain_config.calc_storage_fee(
+                            &state.storage_stat,
+                            config.depool.is_masterchain(),
+                            broxus_util::now(),
+                        )?;
+                        Some((state.storage.balance.grams, storage_fee))
+                    };
 
                     // Get balances of proxies if depool is deployed
                     if matches!(

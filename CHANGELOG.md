@@ -1,3 +1,14 @@
+# 0.2.8 (2023-08-29)
+
+### Added
+
+- Added `storage_fee` field for `nodekeeper validator balance` output entries.
+
+### Changed
+
+- When maintaining DePool balances, the accumulated storage fee on proxies
+  is now taken into account.
+
 # 0.2.7 (2023-08-24)
 
 ### Added

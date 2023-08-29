@@ -34,7 +34,6 @@ pub struct DePool {
 impl DePool {
     pub const INITIAL_BALANCE: u128 = 30 * ONE_EVER;
     pub const CRITICAL_BALANCE: u128 = 20 * ONE_EVER;
-    pub const INITIAL_PROXY_BALANCE: u128 = 3 * ONE_EVER;
     pub const MIN_PROXY_BALANCE: u128 = 2 * ONE_EVER;
 
     pub fn new(
@@ -128,7 +127,12 @@ impl DePool {
         self.internal_message_to_self(ONE_EVER, common::ticktock().encode_internal_input(&[])?)
     }
 
-    pub async fn maintain_balances(&self) -> Result<Vec<InternalMessage>> {
+    pub async fn maintain_balances(
+        &self,
+        config: &ton_block::ConfigParams,
+    ) -> Result<Vec<InternalMessage>> {
+        let config = ton_executor::BlockchainConfig::with_config(config.clone(), 0)?;
+
         let account = self
             .subscription
             .get_account_state(&self.address)
@@ -167,6 +171,13 @@ impl DePool {
                 .context("failed to get proxy state")?
                 .context("proxy not deployed")?;
 
+            let fee = config.calc_storage_fee(
+                &account.storage_stat,
+                proxy.is_masterchain(),
+                broxus_util::now(),
+            )?;
+            let target_balance = Self::MIN_PROXY_BALANCE + fee.as_u128();
+
             let proxy_balance = match account.storage.state {
                 ton_block::AccountState::AccountActive { .. } => {
                     account.storage.balance.grams.as_u128()
@@ -179,9 +190,11 @@ impl DePool {
                 }
             };
 
-            if proxy_balance <= Self::MIN_PROXY_BALANCE {
+            if let Some(mut required_amount) = target_balance.checked_sub(proxy_balance) {
+                // Topup a twice more to reduce the number of messages
+                required_amount += Self::MIN_PROXY_BALANCE;
                 messages.push(InternalMessage {
-                    amount: Self::INITIAL_PROXY_BALANCE - proxy_balance,
+                    amount: required_amount,
                     dst: proxy,
                     payload: Default::default(),
                 });

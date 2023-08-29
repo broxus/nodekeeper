@@ -74,7 +74,7 @@ impl ValidationManager {
             // Get current network config params
             let ConfigWithId {
                 block_id: target_block,
-                config: blockchain_config,
+                config: ref blockchain_config,
             } = subscription.tcp_rpc().get_config_all().await?;
 
             if !self.params.ignore_deploy && self.ensure_deployed(&validator, &subscription).await?
@@ -201,6 +201,7 @@ impl ValidationManager {
                 elector_data,
                 election_id,
                 timings,
+                blockchain_config,
                 guard: &self.guard,
             };
 
@@ -247,7 +248,7 @@ impl ValidationManager {
 
         // Get current network config params
         let ConfigWithId {
-            config: blockchain_config,
+            config: ref blockchain_config,
             ..
         } = subscription.tcp_rpc().get_config_all().await?;
 
@@ -283,6 +284,7 @@ impl ValidationManager {
             elector_data,
             election_id,
             timings,
+            blockchain_config,
             guard: &self.guard,
         };
 
@@ -366,6 +368,7 @@ struct ElectionsContext<'a> {
     elector_data: elector::ElectorData,
     election_id: u32,
     timings: ton_block::ConfigParam15,
+    blockchain_config: &'a ton_block::ConfigParams,
     guard: &'a Mutex<()>,
 }
 
@@ -727,7 +730,7 @@ impl AppConfigValidatorDePool {
         ctx: &ElectionsContext<'_>,
     ) -> Result<()> {
         // Check and refill depool and proxy balances
-        let refill_messages = depool.maintain_balances().await?;
+        let refill_messages = depool.maintain_balances(ctx.blockchain_config).await?;
         for message in refill_messages {
             tracing::info!(
                 target = %message.dst,
