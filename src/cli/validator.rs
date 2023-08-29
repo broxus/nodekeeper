@@ -60,7 +60,7 @@ impl CmdBalance {
             config: blockchain_config,
             ..
         } = node_rpc.get_config_all().await?;
-        let blockchain_config = &ton_executor::BlockchainConfig::with_config(blockchain_config, 0)?;
+        let storage_prices = &StoragePrices::new(&blockchain_config)?;
 
         // Prepare helpers
         let get_account_balance = |address: &ton_block::MsgAddressInt| {
@@ -70,11 +70,11 @@ impl CmdBalance {
                 let state = node_rpc.get_shard_account_state(&address).await?;
                 Ok::<_, anyhow::Error>(match state.read_account()? {
                     ton_block::Account::Account(account) => {
-                        let storage_fee = blockchain_config.calc_storage_fee(
+                        let storage_fee = storage_prices.compute_fee(
                             &account.storage_stat,
                             address.is_masterchain(),
                             broxus_util::now(),
-                        )?;
+                        );
 
                         Some((account.storage.balance.grams, storage_fee))
                     }
@@ -84,8 +84,7 @@ impl CmdBalance {
         };
 
         let make_balance_entry =
-            |address: &ton_block::MsgAddressInt,
-             balance: Option<(ton_block::Grams, ton_block::Grams)>| {
+            |address: &ton_block::MsgAddressInt, balance: Option<(ton_block::Grams, u128)>| {
                 serde_json::json!({
                     "address": address.to_string(),
                     "balance": balance.as_ref().map(|(b, _)| b.to_string()),
@@ -113,11 +112,11 @@ impl CmdBalance {
                 let mut proxies = None;
                 if let ton_block::Account::Account(ref state) = depool.read_account()? {
                     depool_balance = {
-                        let storage_fee = blockchain_config.calc_storage_fee(
+                        let storage_fee = storage_prices.compute_fee(
                             &state.storage_stat,
                             config.depool.is_masterchain(),
                             broxus_util::now(),
-                        )?;
+                        );
                         Some((state.storage.balance.grams, storage_fee))
                     };
 

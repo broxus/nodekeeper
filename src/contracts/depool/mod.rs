@@ -14,7 +14,7 @@ use ton_block::{Deserializable, Serializable};
 use super::{InternalMessage, ONE_EVER};
 use crate::config::DePoolType;
 use crate::network::Subscription;
-use crate::util::make_default_headers;
+use crate::util::{make_default_headers, StoragePrices};
 
 #[derive(Debug, Clone)]
 pub struct DePoolInitParams {
@@ -131,7 +131,7 @@ impl DePool {
         &self,
         config: &ton_block::ConfigParams,
     ) -> Result<Vec<InternalMessage>> {
-        let config = ton_executor::BlockchainConfig::with_config(config.clone(), 0)?;
+        let storage_prices = StoragePrices::new(config)?;
 
         let account = self
             .subscription
@@ -171,12 +171,12 @@ impl DePool {
                 .context("failed to get proxy state")?
                 .context("proxy not deployed")?;
 
-            let fee = config.calc_storage_fee(
+            let fee = storage_prices.compute_fee(
                 &account.storage_stat,
                 proxy.is_masterchain(),
                 broxus_util::now(),
-            )?;
-            let target_balance = Self::MIN_PROXY_BALANCE + fee.as_u128();
+            );
+            let target_balance = Self::MIN_PROXY_BALANCE + fee;
 
             let proxy_balance = match account.storage.state {
                 ton_block::AccountState::AccountActive { .. } => {

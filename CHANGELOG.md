@@ -1,5 +1,11 @@
 # 0.2.8 (2023-08-29)
 
+### Fixed
+
+- Fixed potential units mismatch in storage fee computation.
+
+# 0.2.8 (2023-08-29)
+
 ### Added
 
 - Added `storage_fee` field for `nodekeeper validator balance` output entries.

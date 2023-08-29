@@ -1315,7 +1315,7 @@ dependencies = [
 
 [[package]]
 name = "nodekeeper"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "aes",
  "anyhow",
@@ -2405,7 +2405,7 @@ dependencies = [
 [[package]]
 name = "ton_executor"
 version = "1.15.54"
-source = "git+https://github.com/broxus/ton-labs-executor.git#01f7a017c25fed1413863c2dac570553fa000bdd"
+source = "git+https://github.com/broxus/ton-labs-executor.git#2a38890d53f9c3dad84b3fb9a58e3bb62ba20f44"
 dependencies = [
  "anyhow",
  "log",

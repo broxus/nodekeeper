@@ -125,3 +125,31 @@ pub struct BriefBlockInfo {
     pub prev1: ton_block::BlockIdExt,
     pub prev2: Option<ton_block::BlockIdExt>,
 }
+
+#[derive(Clone)]
+pub struct StoragePrices {
+    inner: ton_executor::AccStoragePrices,
+}
+
+impl StoragePrices {
+    pub fn new(config: &ton_block::ConfigParams) -> Result<Self> {
+        Ok(Self {
+            inner: ton_executor::AccStoragePrices::with_config(&config.storage_prices()?)?,
+        })
+    }
+
+    pub fn compute_fee(
+        &self,
+        storage: &ton_block::StorageInfo,
+        is_masterchain: bool,
+        now: u32,
+    ) -> u128 {
+        self.inner.calc_storage_fee(
+            storage.used().cells().into(),
+            storage.used().bits().into(),
+            storage.last_paid(),
+            now,
+            is_masterchain,
+        )
+    }
+}
