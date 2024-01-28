@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use nekoton_abi::{FunctionBuilder, KnownParamType, UnpackFirst};
 
-use super::strategy::Strategy;
+use crate::contracts::Strategy;
 use crate::network::Subscription;
 
 pub struct Cluster {

@@ -11,7 +11,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 pub struct NodeLogConfig(&'static str);
 
 impl NodeLogConfig {
-    const TEMPLATE: &str = include_str!("log_cfg.yml");
+    const TEMPLATE: &'static str = include_str!("log_cfg.yml");
 
     pub fn generate() -> Self {
         Self(Self::TEMPLATE)
@@ -27,14 +27,14 @@ impl NodeLogConfig {
 pub struct NodeConfig(serde_json::Value);
 
 impl NodeConfig {
-    const IP_ADDRESS: &str = "ip_address";
-    const CONTROL_SERVER: &str = "control_server";
-    const CONTROL_SERVER_PORT: &str = "control_server_port";
-    const ADNL_NODE: &str = "adnl_node";
-    const GLOBAL_CONFIG_PATH: &str = "ton_global_config_name";
-    const INTERNAL_DB_PATH: &str = "internal_db_path";
+    const IP_ADDRESS: &'static str = "ip_address";
+    const CONTROL_SERVER: &'static str = "control_server";
+    const CONTROL_SERVER_PORT: &'static str = "control_server_port";
+    const ADNL_NODE: &'static str = "adnl_node";
+    const GLOBAL_CONFIG_PATH: &'static str = "ton_global_config_name";
+    const INTERNAL_DB_PATH: &'static str = "internal_db_path";
 
-    const TEMPLATE: &str = include_str!("default_config.json");
+    const TEMPLATE: &'static str = include_str!("default_config.json");
 
     pub fn generate() -> Result<Self> {
         serde_json::from_str(Self::TEMPLATE).context("failed to generate node config")

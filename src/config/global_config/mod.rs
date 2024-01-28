@@ -13,8 +13,8 @@ pub struct GlobalConfig {
 }
 
 impl GlobalConfig {
-    pub const MAINNET: &str = include_str!("mainnet.json");
-    pub const TESTNET: &str = include_str!("testnet.json");
+    pub const MAINNET: &'static str = include_str!("mainnet.json");
+    pub const TESTNET: &'static str = include_str!("testnet.json");
 
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let file = std::fs::File::open(path).context("failed to open global config")?;

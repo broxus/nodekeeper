@@ -1,4 +1,16 @@
-# 0.2.8 (2023-08-29)
+# 0.2.11 (2024-01-28)
+
+### Fixed
+
+- Added additional retries for `GetCapabilities` query to avoid false negative node availability checks.
+
+# 0.2.10 (2023-10-17)
+
+### Changed
+
+- Updated default global config for Everscale.
+
+# 0.2.9 (2023-08-29)
 
 ### Fixed
 

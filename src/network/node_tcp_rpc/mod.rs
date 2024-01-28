@@ -6,7 +6,7 @@ use tl_proto::{IntermediateBytes, TlRead, TlWrite};
 use ton_block::Deserializable;
 
 use self::stats::StatsError;
-pub use self::stats::{NodeStats, RunningStats, ValidatorSetEntry};
+pub use self::stats::{NodeStats, ValidatorSetEntry};
 use self::tcp_adnl::{TcpAdnl, TcpAdnlConfig, TcpAdnlError};
 use crate::config::AppConfigControl;
 
