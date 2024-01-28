@@ -86,7 +86,16 @@ impl NodeUdpRpc {
     }
 
     pub async fn get_capabilities(&self) -> Result<proto::Capabilities> {
-        self.inner.adnl_query(proto::GetCapabilities, 1000).await
+        const MAX_ATTEMPTS: usize = 5;
+
+        let mut attempt = 0;
+        loop {
+            let res = self.inner.adnl_query(proto::GetCapabilities, 1000).await;
+            attempt += 1;
+            if res.is_ok() || attempt >= MAX_ATTEMPTS {
+                break res;
+            }
+        }
     }
 
     /// Waits for the next block
