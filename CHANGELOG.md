@@ -1,3 +1,9 @@
+# 0.2.12 / 0.2.13 (2024-02-10)
+
+### Changed
+
+- Build deb package with the lowest version of glibc (2.27).
+
 # 0.2.11 (2024-01-28)
 
 ### Fixed

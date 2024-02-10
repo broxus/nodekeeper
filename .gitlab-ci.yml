@@ -7,7 +7,7 @@ stages:
   - cloudbuild
 
 cloudbuild:package:
-  extends: .cloudbuild:deb-package
+  extends: .cloudbuild:deb-package-nodekeeper
   only:
     - tags
   except:
