@@ -76,6 +76,35 @@
   },
   "gc": {
     "enable_for_archives": true,
-    "enable_for_shard_state_persistent": true
-  }
+    "archives_life_time_hours": null,
+    "enable_for_shard_state_persistent": true,
+    "cells_gc_config": {
+      "gc_interval_sec": 900,
+      "cells_lifetime_sec": 1800
+    }
+  },
+  "cells_db_config": {
+    "states_db_queue_len": 1000,
+    "max_pss_slowdown_mcs": 750,
+    "prefill_cells_counters": false,
+    "cache_cells_counters": true,
+    "cache_size_bytes": 4294967296
+  },
+  "collator_config": {
+    "cutoff_timeout_ms": 1000,
+    "stop_timeout_ms": 1500,
+    "clean_timeout_percentage_points": 150,
+    "optimistic_clean_percentage_points": 1000,
+    "max_secondary_clean_timeout_percentage_points": 350,
+    "max_collate_threads": 10,
+    "retry_if_empty": false,
+    "finalize_empty_after_ms": 800,
+    "empty_collation_sleep_ms": 100,
+    "external_messages_timeout_percentage_points": 100
+  },
+  "restore_db": false,
+  "low_memory_mode": true,
+  "skip_saving_persistent_states": false,
+  "states_cache_mode": "Moderate",
+  "states_cache_cleanup_diff": 1000
 }

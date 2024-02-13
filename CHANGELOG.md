@@ -1,3 +1,9 @@
+# 0.2.14 (2024-02-13)
+
+### Changed
+
+- Updated the default node config.
+
 # 0.2.12 / 0.2.13 (2024-02-10)
 
 ### Changed
