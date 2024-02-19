@@ -1,3 +1,9 @@
+# 0.2.15 (2024-02-19)
+
+### Fixed
+
+- Fixed incorrect memory info parsing (https://github.com/GuillaumeGomez/sysinfo/pull/1058).
+
 # 0.2.14 (2024-02-13)
 
 ### Changed

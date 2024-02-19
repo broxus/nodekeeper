@@ -1,11 +1,11 @@
 [package]
 name = "nodekeeper"
 description = "All-in-one node management tool."
-version = "0.2.14"
+version = "0.2.15"
 authors = ["Ivan Kalinin <i.kalinin@dexpa.io>"]
 repository = "https://github.com/broxus/nodekeeper"
 edition = "2021"
-rust-version = "1.67"
+rust-version = "1.75"
 license-file = "./LICENSE"
 
 [dependencies]
@@ -43,7 +43,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_path_to_error = "0.1"
 sha2 = "0.9"
-sysinfo = "0.29"
+sysinfo = "0.30"
 thiserror = "1.0.37"
 tl-proto = "0.4"
 tokio = { version = "1", features = [

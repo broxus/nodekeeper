@@ -1029,7 +1029,7 @@ fn check_systemd_service(dirs: &ProjectDirs) -> Result<()> {
 }
 
 fn check_resources(node_config: &NodeConfig, output: &mut Output) -> Result<()> {
-    use sysinfo::{System, SystemExt};
+    use sysinfo::System;
 
     fn format_gb(bytes: u64) -> String {
         let gb = (bytes / (1 << 20)) as f64 / 1024.0f64;
