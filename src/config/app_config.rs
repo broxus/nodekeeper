@@ -36,7 +36,7 @@ impl AppConfig {
         std::fs::write(path, data).context("failed to save config")
     }
 
-    pub fn currency(&self) -> &str {
+    pub fn currency(&self) -> &'static str {
         if let Some(currency) = defaults::currency_from_env() {
             return currency;
         }

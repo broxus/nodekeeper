@@ -213,6 +213,19 @@ impl DePool {
         )
     }
 
+    pub fn withdraw_part(&self, amount: u64, from_pooling: bool) -> Result<InternalMessage> {
+        let f = if from_pooling {
+            common::withdraw_from_pooling_round()
+        } else {
+            common::withdraw_part()
+        };
+
+        self.internal_message_to_self(
+            ONE_EVER,
+            f.encode_internal_input(&[amount.token_value().named("withdrawValue")])?,
+        )
+    }
+
     pub fn set_allowed_participant(
         &self,
         address: &ton_block::MsgAddressInt,
@@ -608,6 +621,22 @@ mod common {
         once!(ton_abi::Function, || {
             FunctionBuilder::new("addOrdinaryStake")
                 .input("stake", u64::param_type())
+                .build()
+        })
+    }
+
+    pub fn withdraw_part() -> &'static ton_abi::Function {
+        once!(ton_abi::Function, || {
+            FunctionBuilder::new("withdrawPart")
+                .input("withdrawValue", u64::param_type())
+                .build()
+        })
+    }
+
+    pub fn withdraw_from_pooling_round() -> &'static ton_abi::Function {
+        once!(ton_abi::Function, || {
+            FunctionBuilder::new("withdrawFromPoolingRound")
+                .input("withdrawValue", u64::param_type())
                 .build()
         })
     }

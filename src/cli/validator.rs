@@ -24,7 +24,9 @@ impl Cmd {
     pub async fn run(self, ctx: CliContext) -> Result<()> {
         match self.subcommand {
             SubCmd::Balance(cmd) => cmd.run(ctx).await,
+            SubCmd::Tick(cmd) => invoke_as_cli(cmd.run(ctx)).await,
             SubCmd::Withdraw(cmd) => invoke_as_cli(cmd.run(ctx)).await,
+            SubCmd::Unstake(cmd) => invoke_as_cli(cmd.run(ctx)).await,
             SubCmd::Run(cmd) => cmd.run(ctx).await,
         }
     }
@@ -34,7 +36,9 @@ impl Cmd {
 #[argh(subcommand)]
 enum SubCmd {
     Balance(CmdBalance),
+    Tick(CmdTick),
     Withdraw(CmdWithdraw),
+    Unstake(CmdUnstake),
     Run(CmdRun),
 }
 
@@ -148,6 +152,153 @@ impl CmdBalance {
         };
 
         print_output(output);
+        Ok(())
+    }
+}
+
+#[derive(FromArgs)]
+/// Ticktock depool.
+#[argh(subcommand, name = "tick")]
+struct CmdTick {}
+
+impl CmdTick {
+    async fn run(self, ctx: CliContext) -> Result<()> {
+        let DePoolCmdContext {
+            currency,
+            wallet,
+            depool,
+        } = DePoolCmdContext::new(&ctx).await?;
+
+        // Check wallet balance
+        let wallet_balance = wallet.get_balance().await?.unwrap_or_default();
+        anyhow::ensure!(
+            ONE_EVER * 2 < wallet_balance,
+            "wallet balance is not enough ({} {currency})",
+            Tokens(wallet_balance)
+        );
+
+        // Send external message and wait until it is delivered
+        let TransactionWithHash {
+            hash: tx_hash,
+            data: tx,
+        } = wallet.transfer(depool.ticktock()?).await?;
+
+        // Parse transaction
+        let msg_hash = tx
+            .in_msg
+            .context("external inbound message not found")?
+            .hash();
+
+        // Done
+        print_output(serde_json::json!({
+            "tx_hash": tx_hash.to_hex_string(),
+            "msg_hash": msg_hash.to_hex_string(),
+        }));
+        Ok(())
+    }
+}
+
+#[derive(FromArgs)]
+/// Reduce the validator stake in the depool.
+#[argh(subcommand, name = "unstake")]
+struct CmdUnstake {
+    /// amount to unstake in tokens
+    #[argh(positional)]
+    amount: u128,
+
+    /// never prompt
+    #[argh(switch, short = 'f')]
+    force: bool,
+
+    /// interpret amount as amount in nano tokens
+    #[argh(switch)]
+    nano: bool,
+
+    /// unstake from a pooling round
+    #[argh(switch)]
+    from_pooling: bool,
+}
+
+impl CmdUnstake {
+    async fn run(self, ctx: CliContext) -> Result<()> {
+        let DePoolCmdContext {
+            currency,
+            wallet,
+            depool,
+        } = DePoolCmdContext::new(&ctx).await?;
+
+        // Parse arguments
+        let mut amount = self.amount;
+        if !self.nano {
+            amount = amount.saturating_mul(ONE_EVER);
+        }
+
+        // Get participant info
+        let depool_state = depool.get_state().await?;
+        let Some(participant_info) =
+            depool.get_participant_info(&depool_state, wallet.address())?
+        else {
+            anyhow::bail!("validator wallet is not a participant of the depool");
+        };
+
+        // Check participant info
+        anyhow::ensure!(
+            participant_info.total as u128 <= amount,
+            "participant stake is not enough ({} {currency})",
+            Tokens(participant_info.total),
+        );
+
+        // Check wallet balance
+        let wallet_balance = wallet.get_balance().await?.unwrap_or_default();
+        anyhow::ensure!(
+            ONE_EVER * 2 < wallet_balance,
+            "wallet balance is not enough ({} {currency})",
+            Tokens(wallet_balance)
+        );
+
+        if is_terminal() {
+            eprintln!(
+                "{}\n{}\n{}\n{}\n\n{}\n{}\n{}\n{}\n",
+                style("Wallet address:").green().bold(),
+                style(wallet.address()).bold(),
+                style("DePool address:").green().bold(),
+                style(depool.address()).bold(),
+                style("Total stake:").green().bold(),
+                style(format!("{} {currency}", Tokens(participant_info.total))).bold(),
+                style("Amount to unstake:").green().bold(),
+                style(format!("{} {currency}", Tokens(amount))).bold()
+            );
+
+            if !self.force
+                && !confirm(
+                    &dialoguer::theme::ColorfulTheme::default(),
+                    false,
+                    "Do you really want to unstake tokens?",
+                )?
+            {
+                return Ok(());
+            }
+        }
+
+        // Send external message and wait until it is delivered
+        let TransactionWithHash {
+            hash: tx_hash,
+            data: tx,
+        } = wallet
+            .transfer(depool.withdraw_part(amount as u64, self.from_pooling)?)
+            .await?;
+
+        // Parse transaction
+        let msg_hash = tx
+            .in_msg
+            .context("external inbound message not found")?
+            .hash();
+
+        // Done
+        print_output(serde_json::json!({
+            "tx_hash": tx_hash.to_hex_string(),
+            "msg_hash": msg_hash.to_hex_string(),
+        }));
         Ok(())
     }
 }
@@ -392,5 +543,62 @@ impl CmdRun {
         };
 
         Ok(())
+    }
+}
+
+struct DePoolCmdContext {
+    currency: &'static str,
+    wallet: wallet::Wallet,
+    depool: depool::DePool,
+}
+
+impl DePoolCmdContext {
+    async fn new(ctx: &CliContext) -> Result<Self> {
+        // Load config
+        let mut config = ctx.load_config()?;
+        let validator = match config.validator.take() {
+            Some(AppConfigValidator::DePool(depool)) => depool,
+            Some(AppConfigValidator::Single(_)) => {
+                anyhow::bail!("validator is not configured as a depool");
+            }
+            None => {
+                anyhow::bail!("validator entry not found in the app config");
+            }
+        };
+
+        // Prepare RPC clients
+        let node_tcp_rpc = NodeTcpRpc::new(config.control()?)
+            .await
+            .context("failed to build node TCP client")?;
+        let node_udp_rpc = NodeUdpRpc::new(config.adnl()?)
+            .await
+            .context("failed to build node UDP client")?;
+
+        let subscription = Subscription::new(node_tcp_rpc, node_udp_rpc);
+        subscription.ensure_ready().await?;
+
+        // Prepare wallet
+        let wallet_keys = StoredKeys::load(&ctx.dirs.validator_keys)
+            .context("failed to load validator wallet keys")?
+            .as_keypair();
+
+        let wallet = wallet::Wallet::new(
+            validator.owner.workchain_id() as i8,
+            wallet_keys,
+            subscription.clone(),
+        );
+        anyhow::ensure!(
+            wallet.address() == &validator.owner,
+            "validator wallet address mismatch"
+        );
+
+        // Prepare depool
+        let depool = depool::DePool::new(validator.depool_type, validator.depool, subscription);
+
+        Ok(Self {
+            currency: config.currency(),
+            wallet,
+            depool,
+        })
     }
 }
