@@ -21,24 +21,14 @@ pub struct Cmd {
 
 impl Cmd {
     pub async fn run(self, ctx: CliContext) -> Result<()> {
-        // Start listening termination signals
-        let signal_rx = broxus_util::any_signal(broxus_util::TERMINATION_SIGNALS);
-
-        // Start the main future
-        let fut = async move {
-            match self.subcommand {
-                SubCmd::StateInit(cmd) => cmd.run(),
-                SubCmd::Call(cmd) => cmd.run(ctx).await,
-                SubCmd::Sendx(cmd) => cmd.run(ctx).await,
-                SubCmd::Send(cmd) => cmd.run(ctx).await,
-            }
+        let response = match self.subcommand {
+            SubCmd::StateInit(cmd) => cmd.run()?,
+            SubCmd::Call(cmd) => cmd.run(ctx).await?,
+            SubCmd::Sendx(cmd) => cmd.run(ctx).await?,
+            SubCmd::Send(cmd) => cmd.run(ctx).await?,
         };
 
-        tokio::select! {
-            _ = signal_rx => tracing::info!("termination signal received"),
-            response = fut => print_output(response?),
-        }
-
+        print_output(response);
         Ok(())
     }
 }

@@ -243,7 +243,7 @@ impl CmdUnstake {
 
         // Check participant info
         anyhow::ensure!(
-            participant_info.total as u128 <= amount,
+            amount <= participant_info.total as u128,
             "participant stake is not enough ({} {currency})",
             Tokens(participant_info.total),
         );

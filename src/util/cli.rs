@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use dialoguer::console;
 use dialoguer::theme::Theme;
 use tokio::process::Command;
+use tokio_util::sync::CancellationToken;
 use ton_block::Deserializable;
 
 pub async fn exec(command: &mut Command) -> Result<()> {
@@ -221,20 +222,32 @@ pub async fn invoke_as_cli<F>(f: F) -> Result<()>
 where
     F: Future<Output = Result<()>>,
 {
-    setup_handlers();
-    f.await.or_else(ignore_interrupt)
+    let token = setup_handlers();
+    tokio::select! {
+        res = f => res.or_else(ignore_interrupt),
+        _ = token.cancelled() => {
+            eprintln!();
+            Ok(())
+        }
+    }
 }
 
-fn setup_handlers() {
-    if !is_terminal() {
-        return;
+fn setup_handlers() -> CancellationToken {
+    let token = CancellationToken::new();
+
+    if is_terminal() {
+        ctrlc::set_handler({
+            let cancellation_token = token.clone();
+            move || {
+                cancellation_token.cancel();
+                let term = dialoguer::console::Term::stdout();
+                let _ = term.show_cursor();
+            }
+        })
+        .expect("Error setting Ctrl-C handler");
     }
 
-    ctrlc::set_handler(|| {
-        let term = dialoguer::console::Term::stdout();
-        let _ = term.show_cursor();
-    })
-    .expect("Error setting Ctrl-C handler");
+    token
 }
 
 fn ignore_interrupt(e: anyhow::Error) -> Result<()> {
