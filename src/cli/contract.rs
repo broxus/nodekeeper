@@ -6,7 +6,8 @@ use nekoton_abi::FunctionExt;
 use ton_block::{Deserializable, Serializable};
 
 use super::CliContext;
-use crate::config::{AppConfig, StoredKeys};
+use crate::config::{AppConfigValidator, StoredKeys};
+use crate::contracts::{wallet, InternalMessage, ONE_EVER};
 use crate::network::{NodeTcpRpc, NodeUdpRpc, Subscription};
 use crate::util::*;
 
@@ -20,13 +21,24 @@ pub struct Cmd {
 
 impl Cmd {
     pub async fn run(self, ctx: CliContext) -> Result<()> {
-        let response = match self.subcommand {
-            SubCmd::StateInit(cmd) => cmd.run()?,
-            SubCmd::Call(cmd) => cmd.run(ctx.load_config()?).await?,
-            SubCmd::Send(cmd) => cmd.run(ctx.load_config()?).await?,
+        // Start listening termination signals
+        let signal_rx = broxus_util::any_signal(broxus_util::TERMINATION_SIGNALS);
+
+        // Start the main future
+        let fut = async move {
+            match self.subcommand {
+                SubCmd::StateInit(cmd) => cmd.run(),
+                SubCmd::Call(cmd) => cmd.run(ctx).await,
+                SubCmd::Sendx(cmd) => cmd.run(ctx).await,
+                SubCmd::Send(cmd) => cmd.run(ctx).await,
+            }
         };
 
-        print_output(response);
+        tokio::select! {
+            _ = signal_rx => tracing::info!("termination signal received"),
+            response = fut => print_output(response?),
+        }
+
         Ok(())
     }
 }
@@ -54,6 +66,7 @@ async fn get_account_stuff(
 enum SubCmd {
     StateInit(CmdStateInit),
     Call(CmdCall),
+    Sendx(CmdSendx),
     Send(CmdSend),
 }
 
@@ -160,7 +173,9 @@ struct CmdCall {
 }
 
 impl CmdCall {
-    async fn run(self, config: AppConfig) -> Result<serde_json::Value> {
+    async fn run(self, ctx: CliContext) -> Result<serde_json::Value> {
+        let config = ctx.load_config()?;
+
         let node_rpc = NodeTcpRpc::new(config.control()?).await?;
 
         let clock = nekoton_utils::SimpleClock;
@@ -193,8 +208,8 @@ impl CmdCall {
 
 #[derive(FromArgs)]
 /// Sends an external message
-#[argh(subcommand, name = "send")]
-struct CmdSend {
+#[argh(subcommand, name = "sendx")]
+struct CmdSendx {
     /// method name
     #[argh(positional)]
     method: String,
@@ -204,12 +219,12 @@ struct CmdSend {
     args: serde_json::Value,
 
     /// path to the JSON ABI file
-    #[argh(option, short = 'a')]
+    #[argh(option, short = 'a', long = "abi")]
     abi: PathBuf,
 
-    /// contract address
-    #[argh(option, short = 'd', long = "addr")]
-    address: String,
+    /// destination address
+    #[argh(option, short = 'd', long = "dest")]
+    destination: String,
 
     /// message expiration timeout
     #[argh(option, short = 't', default = "60")]
@@ -224,8 +239,10 @@ struct CmdSend {
     state_init: Option<String>,
 }
 
-impl CmdSend {
-    async fn run(self, config: AppConfig) -> Result<serde_json::Value> {
+impl CmdSendx {
+    async fn run(self, ctx: CliContext) -> Result<serde_json::Value> {
+        let config = ctx.load_config()?;
+
         // Prepare RPC clients
         let node_tcp_rpc = NodeTcpRpc::new(config.control()?)
             .await
@@ -235,7 +252,7 @@ impl CmdSend {
             .context("failed to build node UDP client")?;
 
         // Parse arguments
-        let address = parse_address(&self.address)?;
+        let address = parse_address(&self.destination)?;
 
         let abi = parse_contract_abi(&self.abi)?;
         let method = abi
@@ -316,6 +333,138 @@ impl CmdSend {
             "tx_hash": tx_hash.to_hex_string(),
             "msg_hash": msg_hash.to_hex_string(),
             "output": output,
+            "events": events,
+        }))
+    }
+}
+
+#[derive(FromArgs)]
+/// Sends an internal message
+#[argh(subcommand, name = "send")]
+struct CmdSend {
+    /// method name
+    #[argh(positional)]
+    method: String,
+
+    /// method args
+    #[argh(positional, default = "default_args()")]
+    args: serde_json::Value,
+
+    /// path to the JSON ABI file
+    #[argh(option, short = 'a', long = "abi")]
+    abi: PathBuf,
+
+    /// destination address
+    #[argh(option, short = 'd', long = "dest")]
+    destination: String,
+
+    /// amount to send in tokens
+    #[argh(option)]
+    amount: u128,
+
+    /// send this message with a bounce flag set
+    #[argh(switch)]
+    bounce: bool,
+
+    /// interpret amount as amount in nano tokens
+    #[argh(switch)]
+    nano: bool,
+}
+
+impl CmdSend {
+    async fn run(self, ctx: CliContext) -> Result<serde_json::Value> {
+        let mut config = ctx.load_config()?;
+        let validator = config
+            .validator
+            .take()
+            .context("validator entry not found in the app config")?;
+        let currency = config.currency();
+
+        // Prepare RPC clients
+        let node_tcp_rpc = NodeTcpRpc::new(config.control()?)
+            .await
+            .context("failed to build node TCP client")?;
+        let node_udp_rpc = NodeUdpRpc::new(config.adnl()?)
+            .await
+            .context("failed to build node UDP client")?;
+
+        // Parse arguments
+        let dest = parse_address(&self.destination)?;
+
+        let mut amount = self.amount;
+        if !self.nano {
+            amount = amount.saturating_mul(ONE_EVER);
+        }
+
+        let abi = parse_contract_abi(&self.abi)?;
+        let method = abi
+            .functions
+            .get(&self.method)
+            .with_context(|| format!("method `{}` not found", self.method))?;
+
+        let input = nekoton_abi::parse_abi_tokens(&method.inputs, self.args)?;
+        let payload = method.encode_internal_input(&input)?.into_cell()?;
+
+        // Check whether the node is running
+        node_tcp_rpc.get_stats().await?.try_into_running()?;
+
+        // Create subscription
+        let subscription = Subscription::new(node_tcp_rpc, node_udp_rpc);
+
+        // Prepare wallet
+        let keypair = StoredKeys::load(&ctx.dirs.validator_keys)
+            .context("failed to load validator wallet keys")?
+            .as_keypair();
+
+        let wallet_address = match validator {
+            AppConfigValidator::Single(single) => single.address,
+            AppConfigValidator::DePool(depool) => depool.owner,
+        };
+
+        let wallet =
+            wallet::Wallet::new(wallet_address.workchain_id() as i8, keypair, subscription);
+        anyhow::ensure!(
+            wallet.address() == &wallet_address,
+            "validator wallet address mismatch"
+        );
+
+        // Check wallet balance
+        let wallet_balance = wallet.get_balance().await?.unwrap_or_default();
+        anyhow::ensure!(
+            amount < wallet_balance,
+            "wallet balance is not enough ({} {currency})",
+            Tokens(wallet_balance)
+        );
+
+        // Send external message and wait until it is delivered
+        let TransactionWithHash {
+            hash: tx_hash,
+            data: tx,
+        } = wallet
+            .transfer(InternalMessage {
+                dst: dest,
+                amount,
+                payload,
+                bounce: self.bounce,
+            })
+            .await?;
+
+        // Parse transaction
+        let msg_hash = tx.in_msg.context("inbound message not found")?.hash();
+
+        let mut events = Vec::new();
+
+        tx.out_msgs.iterate(|ton_block::InRefValue(msg)| {
+            if let Some(ParsedData::Event(event)) = parse_message(&abi, method, &msg)? {
+                events.push(event);
+            }
+            Ok(true)
+        })?;
+
+        // Done
+        Ok(serde_json::json!({
+            "tx_hash": tx_hash.to_hex_string(),
+            "msg_hash": msg_hash.to_hex_string(),
             "events": events,
         }))
     }

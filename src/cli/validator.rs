@@ -259,6 +259,7 @@ impl CmdWithdraw {
                 dst: dest,
                 amount,
                 payload: Default::default(),
+                bounce: false,
             })
             .await?;
 

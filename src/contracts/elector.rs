@@ -43,6 +43,7 @@ impl Elector {
             payload: methods::recover_stake()
                 .encode_internal_input(&[now.token_value().named("query_id")])
                 .and_then(ton_types::BuilderData::into_cell)?,
+            bounce: false,
         })
     }
 

@@ -15,14 +15,16 @@ pub struct InternalMessage {
     pub dst: ton_block::MsgAddressInt,
     pub amount: u128,
     pub payload: ton_types::Cell,
+    pub bounce: bool,
 }
 
 impl InternalMessage {
-    pub fn empty(dst: ton_block::MsgAddressInt, amount: u128) -> Self {
+    pub fn empty(dst: ton_block::MsgAddressInt, amount: u128, bounce: bool) -> Self {
         Self {
             dst,
             amount,
             payload: Default::default(),
+            bounce,
         }
     }
 }

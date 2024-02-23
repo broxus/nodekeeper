@@ -463,6 +463,7 @@ impl AppConfigValidatorSingle {
                 dst: ctx.elector.address().clone(),
                 amount: self.stake_per_round as u128 + ONE_EVER,
                 payload,
+                bounce: false,
             })
             .await
             .context("failed to participate in elections")?;
@@ -556,7 +557,11 @@ impl AppConfigValidatorDePool {
 
                 tracing::info!("transferring initial funds to the DePool");
                 wallet
-                    .call(InternalMessage::empty(depool.address().clone(), balance))
+                    .call(InternalMessage::empty(
+                        depool.address().clone(),
+                        balance,
+                        false,
+                    ))
                     .await
                     .context("failed to transfer funds to the DePool contract")?;
             }
@@ -714,6 +719,7 @@ impl AppConfigValidatorDePool {
                 dst: depool.address().clone(),
                 amount: ONE_EVER,
                 payload,
+                bounce: false,
             })
             .await
             .context("failed to participate in elections")?;

@@ -197,6 +197,7 @@ impl DePool {
                     amount: required_amount,
                     dst: proxy,
                     payload: Default::default(),
+                    bounce: false,
                 });
             }
         }
@@ -278,6 +279,7 @@ impl DePool {
             amount,
             dst: self.address.clone(),
             payload: payload.into_cell()?,
+            bounce: false,
         })
     }
 }

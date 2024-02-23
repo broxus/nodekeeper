@@ -104,7 +104,7 @@ impl Wallet {
         let inputs = ever_wallet::SendTransactionInputs {
             dest: internal_message.dst,
             value: internal_message.amount,
-            bounce: false,
+            bounce: internal_message.bounce,
             flags: 3,
             payload: internal_message.payload,
         }
