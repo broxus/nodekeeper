@@ -879,8 +879,12 @@ async fn setup_binary(
     }
 
     fn parse_node_version(output: &[u8]) -> Option<&str> {
+        const OLD_PREFIX: &[u8] = b"TON Node, version ";
+        const NEW_PREFIX: &[u8] = b"EVER Node, version ";
+
         output
-            .strip_prefix(b"TON Node, version ")
+            .strip_prefix(NEW_PREFIX)
+            .or_else(|| output.strip_prefix(OLD_PREFIX))
             .and_then(|output| output.split(|&ch| ch == b'\n').next())
             .and_then(|output| std::str::from_utf8(output).ok())
     }

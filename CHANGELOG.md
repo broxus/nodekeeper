@@ -1,3 +1,9 @@
+# 0.2.17 (2024-04-22)
+
+### Fixed
+
+- Fixed incorrect node version parsing.
+
 # 0.2.16 (2024-04-22)
 
 ### Added
