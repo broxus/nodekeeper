@@ -64,7 +64,7 @@ impl TryFrom<proto::Stats> for NodeStats {
 
         for item in stats.items {
             match item.key.as_slice() {
-                STATS_SYNC_STATUS => {
+                STATS_SYNC_STATUS | STATS_NODE_STATUS => {
                     sync_status = Some(parse_stat::<SyncStatus>(&item.value)?);
                 }
                 STATS_MC_BLOCK_TIME => {
@@ -81,25 +81,16 @@ impl TryFrom<proto::Stats> for NodeStats {
                 STATS_TIMEDIFF => {
                     mc_time_diff = Some(parse_stat::<i32>(&item.value)?);
                 }
-                STATS_SHARDS_TIMEDIFF => {
-                    #[derive(Deserialize)]
-                    #[serde(untagged)]
-                    enum ShardsTimeDiff<'a> {
-                        Unknown(&'a str),
-                        Known(i32),
-                    }
-                    sc_time_diff = match parse_stat(&item.value)? {
-                        ShardsTimeDiff::Unknown(..) => None,
-                        ShardsTimeDiff::Known(diff) => Some(diff),
-                    };
+                STATS_SHARDS_TIMEDIFF if item.value != VALUE_UNKNOWN => {
+                    sc_time_diff = Some(parse_stat::<i32>(&item.value)?);
                 }
-                STATS_IN_CURRENT_VSET => {
+                STATS_IN_CURRENT_VSET if item.value != VALUE_UNKNOWN => {
                     in_current_vset = Some(parse_stat::<bool>(&item.value)?);
                 }
                 STATS_CURRENT_VSET_ADNL => {
                     current_vset_adnl = Some(parse_stat(&item.value)?);
                 }
-                STATS_IN_NEXT_VSET => {
+                STATS_IN_NEXT_VSET if item.value != VALUE_UNKNOWN => {
                     in_next_vset = Some(parse_stat::<bool>(&item.value)?);
                 }
                 STATS_NEXT_VSET_ADNL => {
@@ -115,7 +106,9 @@ impl TryFrom<proto::Stats> for NodeStats {
                         #[serde(with = "serde_hex_array")]
                         fh: [u8; 32],
                     }
-                    let block = parse_stat::<Block>(&item.value)?;
+                    let Ok(block) = parse_stat::<Block>(&item.value) else {
+                        continue;
+                    };
 
                     let mut shard_parts = block.shard.split(':');
                     let shard_id = match (shard_parts.next(), shard_parts.next()) {
@@ -264,6 +257,7 @@ pub enum StatsError {
 }
 
 const STATS_SYNC_STATUS: &[u8] = b"sync_status";
+const STATS_NODE_STATUS: &[u8] = b"node_status";
 const STATS_MC_BLOCK_TIME: &[u8] = b"masterchainblocktime";
 const STATS_NODE_VERSION: &[u8] = b"node_version";
 const STATS_PUBLIC_OVERLAY_ADNL_ID: &[u8] = b"public_overlay_key_id";
@@ -274,3 +268,5 @@ const STATS_CURRENT_VSET_ADNL: &[u8] = b"current_vset_p34_adnl_id";
 const STATS_IN_NEXT_VSET: &[u8] = b"in_next_vset_p36";
 const STATS_NEXT_VSET_ADNL: &[u8] = b"next_vset_p36_adnl_id";
 const STATS_LAST_APPLIED_MC_BLOCK: &[u8] = b"last_applied_masterchain_block_id";
+
+const VALUE_UNKNOWN: &[u8] = b"\"unknown\"";

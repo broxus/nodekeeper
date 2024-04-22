@@ -73,6 +73,10 @@ impl Cmd {
                 let stats = rpc_node.get_stats().await?;
                 serde_json::to_value(stats)?
             }
+            SubCmd::GetRawStats(_) => {
+                let rpc_node = ctx.create_rpc_node().await?;
+                rpc_node.get_raw_stats().await?
+            }
             SubCmd::SetStatesGcInterval(cmd) => {
                 let rpc_node = ctx.create_rpc_node().await?;
                 rpc_node.set_states_gc_interval(cmd.interval).await?;
@@ -210,6 +214,7 @@ enum SubCmd {
     AddPermKey(CmdAddPermKey),
     AddValidatorAddr(CmdAddValidatorAddr),
     GetStats(CmdGetStats),
+    GetRawStats(CmdGetRawStats),
     SetStatesGcInterval(CmdSetStatesGcInterval),
     GetConfig(CmdGetConfig),
     GetConfigParam(CmdGetConfigParam),
@@ -287,6 +292,11 @@ struct CmdAddValidatorAddr {
 /// Get validator node stats
 #[argh(subcommand, name = "getstats")]
 struct CmdGetStats {}
+
+#[derive(FromArgs)]
+/// Get validator node stats as is
+#[argh(subcommand, name = "getrawstats")]
+struct CmdGetRawStats {}
 
 #[derive(FromArgs)]
 /// Sets states GC interval

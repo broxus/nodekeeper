@@ -15,6 +15,8 @@ loggers:
   # node messages
   ton_node:
     level: info
+  ever_node:
+    level: info
   boot:
     level: info
   sync:
@@ -37,6 +39,8 @@ loggers:
 
   # block messages
   ton_block:
+    level: off
+  ever_block:
     level: off
 
   # block messages

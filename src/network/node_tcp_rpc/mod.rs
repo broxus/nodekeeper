@@ -93,6 +93,21 @@ impl NodeTcpRpc {
         NodeStats::try_from(stats).map_err(|e| NodeRpcError::InvalidStats(e).into())
     }
 
+    pub async fn get_raw_stats(&self) -> Result<serde_json::Value> {
+        let stats = self.query::<_, proto::Stats>(proto::GetStats).await?;
+
+        let mut result = serde_json::Map::new();
+        for stat in stats.items {
+            let key = String::from_utf8_lossy(&stat.key).into_owned();
+            let Ok(value) = serde_json::from_slice(&stat.value) else {
+                continue;
+            };
+            result.insert(key, value);
+        }
+
+        Ok(serde_json::Value::Object(result))
+    }
+
     pub async fn set_states_gc_interval(&self, interval_ms: u32) -> Result<()> {
         self.query(proto::SetStatesGcInterval { interval_ms })
             .await

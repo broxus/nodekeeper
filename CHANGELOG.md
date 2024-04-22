@@ -1,3 +1,10 @@
+# 0.2.16 (2024-04-22)
+
+### Added
+
+- Added support for the new default repo and renamed node binary.
+- Added `getrawstats` subcommand to get validation stats as is.
+
 # 0.2.15 (2024-02-19)
 
 ### Fixed

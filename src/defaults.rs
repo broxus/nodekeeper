@@ -6,7 +6,7 @@ use crate::util::parse_hex_or_base64;
 
 pub const DEFAULT_CURRENCY: &str = "EVER";
 
-pub const DEFAULT_NODE_REPO: &str = "https://github.com/tonlabs/ever-node.git";
+pub const DEFAULT_NODE_REPO: &str = "https://github.com/everx-labs/ever-node.git";
 
 pub const DEFAULT_CONTROL_PORT: u16 = 5031;
 pub const DEFAULT_LOCAL_ADNL_PORT: u16 = 0;
@@ -55,7 +55,7 @@ decl_known_networks! {
     detect_custom_defaults, {
         "ywj7H75tJ3PgbEeX+UNP3j0iR1x9imIIJJuQgrlCr8s=" => {
             currency: "VENOM",
-            node_repo: "https://github.com/tonlabs/ever-node.git -f with_signature_id",
+            node_repo: "https://github.com/everx-labs/ever-node.git -f with_signature_id",
         },
     }
 }

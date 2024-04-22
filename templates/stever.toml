@@ -1,7 +1,7 @@
 [general]
 node_db_path = "/var/ever/db"
 global_config = "ever_mainnet"
-node_repo = "https://github.com/tonlabs/ever-node"
+node_repo = "https://github.com/everx-labs/ever-node"
 
 [adnl]
 port = 30100

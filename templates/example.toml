@@ -18,12 +18,12 @@ reset_logger_config = false
 reset_node_config = false
 # Whether to reset the existing app config. Default: `false`.
 reset_app_config = false
-# Repo url. Default: `https://github.com/tonlabs/ever-node`
-node_repo = "https://github.com/tonlabs/ever-node"
+# Repo url. Default: `https://github.com/everx-labs/ever-node`
+node_repo = "https://github.com/everx-labs/ever-node"
 
 ## Alternative repo url:
 # [general.node_repo]
-# url = "https://github.com/tonlabs/ever-node"
+# url = "https://github.com/everx-labs/ever-node"
 # branch = "signature_with_id"
 # features = ["signature_with_id"]
 

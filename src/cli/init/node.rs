@@ -1008,7 +1008,14 @@ async fn build_node<P: AsRef<Path>>(target: P, features: &[String]) -> Result<Pa
     exec(&mut command).await.context("failed to build node")?;
 
     // Return the path to the freshly built binary
-    Ok(target.join("target").join("release").join("ton_node"))
+    for binary_name in ["ton_node", "ever-node"] {
+        let path = target.join("target").join("release").join(binary_name);
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+
+    anyhow::bail!("node binary not found")
 }
 
 #[cfg(not(feature = "packaged"))]
