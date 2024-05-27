@@ -1,8 +1,16 @@
 use tl_proto::{IntermediateBytes, TlRead, TlWrite};
 
-#[derive(TlWrite)]
+#[derive(Debug, TlWrite)]
 #[tl(boxed, id = "engine.validator.controlQuery", scheme = "proto.tl")]
 pub struct ControlQuery<T>(pub IntermediateBytes<T>);
+
+#[derive(Debug, TlRead)]
+#[tl(boxed, id = "engine.validator.controlQueryError", scheme = "proto.tl")]
+pub struct ControlQueryError {
+    pub code: i32,
+    #[tl(with = "tl_string")]
+    pub message: String,
+}
 
 #[derive(Copy, Clone, TlWrite)]
 #[tl(boxed, id = "engine.validator.generateKeyPair", scheme = "proto.tl")]
@@ -173,3 +181,12 @@ pub enum ShardAccount {
 }
 
 pub type HashRef<'tl> = &'tl [u8; 32];
+
+mod tl_string {
+    use tl_proto::{TlRead, TlResult};
+
+    pub fn read(packet: &[u8], offset: &mut usize) -> TlResult<String> {
+        let bytes = <&[u8]>::read_from(packet, offset)?;
+        Ok(String::from_utf8_lossy(bytes).into_owned())
+    }
+}

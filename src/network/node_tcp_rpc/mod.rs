@@ -3,7 +3,6 @@ use std::time::Duration;
 use anyhow::Result;
 use everscale_crypto::ed25519;
 use tl_proto::{IntermediateBytes, TlRead, TlWrite};
-use ton_block::Deserializable;
 
 use self::stats::StatsError;
 pub use self::stats::{NodeStats, ValidatorSetEntry};
@@ -124,6 +123,8 @@ impl NodeTcpRpc {
     }
 
     pub async fn get_config_all(&self) -> Result<ConfigWithId> {
+        use ton_block::Deserializable;
+
         let proto::ConfigInfo {
             id, config_proof, ..
         } = self
@@ -161,6 +162,8 @@ impl NodeTcpRpc {
         &self,
         address: &ton_block::MsgAddressInt,
     ) -> Result<ton_block::ShardAccount> {
+        use ton_block::Deserializable;
+
         let shard_account = self
             .query::<_, proto::ShardAccount>(proto::GetShardAccountState {
                 address: address.to_string().as_bytes(),
@@ -181,6 +184,31 @@ impl NodeTcpRpc {
         Q: TlWrite<Repr = tl_proto::Boxed>,
         for<'a> R: TlRead<'a>,
     {
+        enum QueryResponse<T> {
+            Ok(T),
+            Err(String),
+        }
+
+        impl<'a, R> tl_proto::TlRead<'a> for QueryResponse<R>
+        where
+            R: TlRead<'a>,
+        {
+            type Repr = tl_proto::Boxed;
+
+            fn read_from(packet: &'a [u8], offset: &mut usize) -> tl_proto::TlResult<Self> {
+                let constructor = {
+                    let mut offset: usize = *offset;
+                    <u32 as TlRead>::read_from(packet, &mut offset)?
+                };
+                if constructor == proto::ControlQueryError::TL_ID {
+                    let proto::ControlQueryError { message, .. } = <_>::read_from(packet, offset)?;
+                    Ok(QueryResponse::Err(message))
+                } else {
+                    <R>::read_from(packet, offset).map(QueryResponse::Ok)
+                }
+            }
+        }
+
         match self
             .tcp_adnl
             .query(
@@ -189,7 +217,8 @@ impl NodeTcpRpc {
             )
             .await
         {
-            Ok(Some(data)) => Ok(data),
+            Ok(Some(QueryResponse::Ok(data))) => Ok(data),
+            Ok(Some(QueryResponse::Err(message))) => Err(anyhow::Error::msg(message)),
             Ok(None) => Err(NodeRpcError::QueryTimeout.into()),
             Err(e) => Err(NodeRpcError::QueryFailed(e).into()),
         }

@@ -49,6 +49,7 @@ raw.shardAccountNone = raw.ShardAccountState;
 tcp.ping random_id:long = tcp.Pong;
 
 engine.validator.controlQuery data:bytes = Object;
+engine.validator.controlQueryError code:int message:string = engine.validator.ControlQueryError;
 
 engine.validator.generateKeyPair = engine.validator.KeyHash;
 engine.validator.exportPublicKey key_hash:int256 = PublicKey;

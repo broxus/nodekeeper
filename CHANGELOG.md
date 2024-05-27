@@ -1,3 +1,9 @@
+# 0.2.18 (2024-05-27)
+
+### Fixed
+
+- Fixed control query error message response.
+
 # 0.2.17 (2024-04-22)
 
 ### Fixed

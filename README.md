@@ -242,6 +242,15 @@ Commands:
 </p>
 </details>
 
+## FAQ
+
+- **I'm trying to participate in elections, but the node fails to generate keys with `Error: Permission denied (os error 13)`**
+
+  **Answer:** Ensure that the configs folder has correct permissions. This might help:
+  ```bash
+  sudo chown -hR nodekeeper /var/nodekeeper
+  ```
+
 ## How it works
 
 This tool is a replacement of `ever-node-tools` and contains all the necessary functionality to manage a node.
